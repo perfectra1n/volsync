@@ -1,6 +1,6 @@
 ######################################################################
 # Establish a common builder image for all golang-based images
-FROM golang:1.23 AS golang-builder
+FROM golang:1.24 AS golang-builder
 USER root
 WORKDIR /workspace
 # We don't vendor modules. Enforce that behavior
@@ -59,6 +59,22 @@ COPY /mover-restic/minio-go ./minio-go
 WORKDIR /workspace/restic
 
 RUN go run build.go --enable-cgo
+
+
+######################################################################
+# Build kopia
+FROM golang-builder AS kopia-builder
+
+ARG KOPIA_VERSION="v0.21.1"
+ARG KOPIA_GIT_HASH="0733cb4d2a731dbb92d927f66230694e014f4df2"
+
+RUN git clone --depth 1 -b ${KOPIA_VERSION} https://github.com/kopia/kopia.git
+WORKDIR /workspace/kopia
+
+# Make sure we have the correct Kopia release
+RUN /bin/bash -c "[[ $(git rev-list -n 1 HEAD) == ${KOPIA_GIT_HASH} ]]"
+
+RUN go build -o kopia
 
 
 ######################################################################
@@ -145,6 +161,12 @@ COPY --from=restic-builder /workspace/restic/restic /usr/local/bin/restic
 COPY /mover-restic/entry.sh \
      /mover-restic/
 RUN chmod a+rx /mover-restic/*.sh
+
+##### kopia
+COPY --from=kopia-builder /workspace/kopia/kopia /usr/local/bin/kopia
+COPY /mover-kopia/entry.sh \
+     /mover-kopia/
+RUN chmod a+rx /mover-kopia/*.sh
 
 ##### rsync (ssh)
 COPY /mover-rsync/source.sh \
