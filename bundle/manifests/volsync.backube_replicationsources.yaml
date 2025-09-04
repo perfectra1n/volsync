@@ -1,9 +1,9 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.3
-  creationTimestamp: null
   name: replicationsources.volsync.backube
 spec:
   group: volsync.backube
@@ -100,6 +100,18 @@ spec:
                           snapshot
                         type: string
                     type: object
+                  additionalArgs:
+                    description: |-
+                      AdditionalArgs allows specifying additional command-line arguments for Kopia.
+                      These arguments will be passed to Kopia snapshot commands during backup operations.
+                      This provides flexibility for advanced users to utilize Kopia features not directly
+                      exposed by VolSync. Use with caution as invalid arguments may cause backup failures.
+                      Security-sensitive flags like --password and --config-file are not allowed.
+                      Example: ["--one-file-system", "--ignore-cache-dirs"]
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
                   cacheAccessModes:
                     description: CacheAccessModes can be used to set the accessModes
                       of kopia metadata cache volume
@@ -7180,9 +7192,3 @@ spec:
     storage: true
     subresources:
       status: {}
-status:
-  acceptedNames:
-    kind: ""
-    plural: ""
-  conditions: null
-  storedVersions: null
