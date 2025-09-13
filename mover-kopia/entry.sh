@@ -625,6 +625,42 @@ function apply_json_repository_config {
     fi
 }
 
+# Detect and warn about S3 prefix conflicts
+# This function checks if both KOPIA_REPOSITORY contains a prefix and KOPIA_S3_BUCKET is set
+# which could lead to conflicting or duplicate paths
+function check_s3_prefix_conflicts {
+    # Only check if KOPIA_S3_BUCKET is explicitly set
+    if [[ -n "${KOPIA_S3_BUCKET}" ]]; then
+        # Check if KOPIA_REPOSITORY also contains an S3 URL with a prefix
+        if [[ "${KOPIA_REPOSITORY}" =~ ^s3://[^/]+/(.+) ]]; then
+            local repo_prefix="${BASH_REMATCH[1]}"
+
+            echo "=== S3 PREFIX CONFLICT WARNING ==="
+            echo "Both KOPIA_S3_BUCKET and KOPIA_REPOSITORY with prefix are specified:"
+            echo "  KOPIA_S3_BUCKET: ${KOPIA_S3_BUCKET}"
+            echo "  KOPIA_REPOSITORY: ${KOPIA_REPOSITORY} (contains prefix: ${repo_prefix})"
+            echo ""
+            echo "This configuration may lead to unexpected behavior:"
+            echo "  - When KOPIA_S3_BUCKET is set, it takes precedence over the bucket in KOPIA_REPOSITORY"
+            echo "  - The prefix from KOPIA_REPOSITORY will still be used"
+            echo "  - This could result in a path like: s3://${KOPIA_S3_BUCKET}/${repo_prefix}"
+            echo ""
+            echo "Recommended solutions:"
+            echo "  1. Use ONLY KOPIA_REPOSITORY with the full S3 URL (including prefix)"
+            echo "  2. OR use KOPIA_S3_BUCKET with KOPIA_S3_PREFIX (if needed)"
+            echo "  3. Avoid mixing both configuration methods"
+            echo "==================================="
+            echo ""
+
+            # Log the resolved configuration for clarity
+            echo "Resolved configuration will use:"
+            echo "  Bucket: ${KOPIA_S3_BUCKET}"
+            echo "  Prefix: ${repo_prefix}"
+            echo ""
+        fi
+    fi
+}
+
 # Connect to or create the repository
 function apply_compression_policy {
     if [[ -n "${KOPIA_COMPRESSION}" ]]; then
@@ -774,11 +810,14 @@ function ensure_connected {
 
 function connect_repository {
     echo "=== Connecting to existing repository ==="
-    
+
     # Determine repository type from environment variables and connect
     # Check both explicit KOPIA_S3_BUCKET and s3:// repository URL pattern
     if [[ -n "${KOPIA_S3_BUCKET}" ]] || [[ "${KOPIA_REPOSITORY}" =~ ^s3:// ]]; then
         echo "Connecting to S3 repository"
+
+        # Check for potential prefix conflicts before proceeding
+        check_s3_prefix_conflicts
         echo ""
         echo "=== S3 Connection Debug ==="
         echo "KOPIA_S3_BUCKET: $([ -n "${KOPIA_S3_BUCKET}" ] && echo "[SET]" || echo "[NOT SET]")"
@@ -790,9 +829,11 @@ function connect_repository {
         echo "KOPIA_S3_DISABLE_TLS: $([ -n "${KOPIA_S3_DISABLE_TLS}" ] && echo "[SET]" || echo "[NOT SET]")"
         echo "AWS_S3_DISABLE_TLS: $([ -n "${AWS_S3_DISABLE_TLS}" ] && echo "[SET]" || echo "[NOT SET]")"
         echo "KOPIA_PASSWORD: $([ -n "${KOPIA_PASSWORD}" ] && echo "[SET]" || echo "[NOT SET]")"
-        
+
         # Extract bucket name from repository URL if not explicitly set
         local S3_BUCKET="${KOPIA_S3_BUCKET}"
+        # AWS S3 bucket names must be lowercase only (a-z, 0-9, dots, and hyphens)
+        # See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
         if [[ -z "${S3_BUCKET}" ]] && [[ "${KOPIA_REPOSITORY}" =~ ^s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/?(.*)$ ]]; then
             S3_BUCKET="${BASH_REMATCH[1]}"
             # Validate S3 bucket name format
@@ -988,11 +1029,14 @@ function connect_repository {
 
 function create_repository {
     echo "=== Creating repository ==="
-    
+
     # Determine repository type from environment variables
     # Check both explicit KOPIA_S3_BUCKET and s3:// repository URL pattern
     if [[ -n "${KOPIA_S3_BUCKET}" ]] || [[ "${KOPIA_REPOSITORY}" =~ ^s3:// ]]; then
         echo "Creating S3 repository"
+
+        # Check for potential prefix conflicts before proceeding
+        check_s3_prefix_conflicts
         echo ""
         echo "=== S3 Creation Debug ==="
         echo "KOPIA_S3_BUCKET: $([ -n "${KOPIA_S3_BUCKET}" ] && echo "[SET]" || echo "[NOT SET]")"
@@ -1005,9 +1049,11 @@ function create_repository {
         echo "AWS_S3_DISABLE_TLS: $([ -n "${AWS_S3_DISABLE_TLS}" ] && echo "[SET]" || echo "[NOT SET]")"
         echo "KOPIA_PASSWORD: $([ -n "${KOPIA_PASSWORD}" ] && echo "[SET]" || echo "[NOT SET]")"
         echo "KOPIA_CACHE_DIR: $([ -n "${KOPIA_CACHE_DIR}" ] && echo "[SET]" || echo "[NOT SET]")"
-        
+
         # Extract bucket name from repository URL if not explicitly set
         local S3_BUCKET="${KOPIA_S3_BUCKET}"
+        # AWS S3 bucket names must be lowercase only (a-z, 0-9, dots, and hyphens)
+        # See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
         if [[ -z "${S3_BUCKET}" ]] && [[ "${KOPIA_REPOSITORY}" =~ ^s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/?(.*)$ ]]; then
             S3_BUCKET="${BASH_REMATCH[1]}"
             # Validate S3 bucket name format
@@ -1069,11 +1115,11 @@ function create_repository {
             S3_PREFIX="${BASH_REMATCH[1]}"
             # Validate S3 prefix for security
             if [[ "${S3_PREFIX}" =~ ^[a-zA-Z0-9._/-]+$ ]] && [[ ! "${S3_PREFIX}" =~ \.\. ]]; then
-                # Ensure S3 prefix has a trailing slash for proper path separation
-                # This prevents ambiguous file paths in S3 storage
-                if [[ -n "${S3_PREFIX}" ]] && [[ ! "${S3_PREFIX}" =~ /$ ]]; then
-                    S3_PREFIX="${S3_PREFIX}/"
-                    echo "Added trailing slash to S3 prefix for proper path separation"
+                # Remove trailing slash from S3 prefix for consistency
+                # Kopia handles S3 paths correctly without trailing slashes
+                if [[ -n "${S3_PREFIX}" ]] && [[ "${S3_PREFIX}" =~ /$ ]]; then
+                    S3_PREFIX="${S3_PREFIX%/}"
+                    echo "Removed trailing slash from S3 prefix for consistency"
                 fi
                 echo "Using S3 prefix: ${S3_PREFIX}"
                 if [[ -n "${S3_PREFIX}" ]]; then
