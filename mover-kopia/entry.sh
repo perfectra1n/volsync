@@ -1242,6 +1242,11 @@ function do_backup {
         SNAPSHOT_CMD+=(--override-source="${KOPIA_SOURCE_PATH_OVERRIDE}")
     fi
     
+    # Add username/hostname overrides for snapshot creation
+    # This ensures snapshots are created with the correct identity
+    # even when using a cached repository configuration
+    add_user_overrides SNAPSHOT_CMD
+    
     # Add additional arguments if specified
     add_additional_args SNAPSHOT_CMD
     
