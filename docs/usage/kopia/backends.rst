@@ -7,11 +7,22 @@ Storage Backends
 
 Kopia supports various storage backends with their respective configuration formats:
 
+.. important::
+   **Repository Configuration Best Practice**
+
+   For optimal deduplication and storage efficiency, use a **single Kopia repository**
+   (single bucket/container without path prefixes) for all your PVCs. Kopia's
+   content-defined chunking provides excellent deduplication across all data in a
+   repository, commonly achieving 50-80% storage reduction.
+
+   Only use separate repositories or path prefixes when you have specific requirements
+   like compliance (HIPAA, PCI-DSS), organizational boundaries, or geographic constraints.
+
 .. note::
    **Alternative: Filesystem Destination**
-   
-   Instead of configuring a remote storage backend, you can now use a PersistentVolumeClaim 
-   as a filesystem-based backup destination. This is ideal for local backups, NFS storage, 
+
+   Instead of configuring a remote storage backend, you can now use a PersistentVolumeClaim
+   as a filesystem-based backup destination. This is ideal for local backups, NFS storage,
    or air-gapped environments. See :doc:`filesystem-destination` for details.
 
 S3-compatible storage (AWS S3, MinIO, etc.)
@@ -25,7 +36,10 @@ S3-compatible storage (AWS S3, MinIO, etc.)
      name: kopia-config
    type: Opaque
    stringData:
-     KOPIA_REPOSITORY: s3://my-bucket/backups
+     # RECOMMENDED: Use bucket root for maximum deduplication
+     KOPIA_REPOSITORY: s3://my-bucket
+     # AVOID: Path prefixes prevent deduplication between paths
+     # KOPIA_REPOSITORY: s3://my-bucket/backups  # Not recommended
      KOPIA_PASSWORD: my-secure-password
      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
@@ -33,6 +47,11 @@ S3-compatible storage (AWS S3, MinIO, etc.)
      AWS_S3_ENDPOINT: http://minio.example.com:9000
      # Optional: specify region
      AWS_REGION: us-west-2
+
+.. tip::
+   **Best Practice**: Use a single S3 bucket without path prefixes for all your backups.
+   This maximizes Kopia's deduplication capabilities across all PVCs, potentially
+   reducing storage costs by 50-80%.
 
 **Environment Variable Variants**
 
@@ -58,7 +77,8 @@ variables and Kopia-specific variables are supported:
      name: kopia-config
    type: Opaque
    stringData:
-     KOPIA_REPOSITORY: s3://my-bucket/backups
+     # RECOMMENDED: Use bucket root for maximum deduplication
+     KOPIA_REPOSITORY: s3://my-bucket
      KOPIA_PASSWORD: my-secure-password
      # Kopia-specific S3 variables (alternative to AWS_* variables)
      KOPIA_S3_BUCKET: my-bucket

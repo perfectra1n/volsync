@@ -606,6 +606,53 @@ This is especially useful in multi-tenant scenarios where:
 Best practices for shared repositories
 ---------------------------------------
 
+**Repository Configuration Strategy**
+
+**Single Repository Approach (Strongly Recommended)**
+
+For optimal storage efficiency and deduplication benefits, use a single Kopia repository
+for all your PVCs within an organization or cluster:
+
+.. code-block:: yaml
+
+   # Single shared repository for ALL PVCs
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: kopia-repository-shared
+   type: Opaque
+   stringData:
+     KOPIA_REPOSITORY: s3://company-backups  # No path prefixes!
+     KOPIA_PASSWORD: secure-repository-password
+     # ... credentials
+
+This approach maximizes deduplication across all your data. Kopia's content-defined
+chunking means that duplicate data blocks (like OS files, common libraries, or
+repeated patterns) are stored only once across ALL your backups, regardless of which
+PVC they come from.
+
+**Benefits of Single Repository**:
+
+- **Maximum deduplication**: 50-80% storage reduction is common
+- **Simplified management**: One repository to monitor and maintain
+- **Automatic isolation**: Each ReplicationSource gets a unique identity
+- **Cost optimization**: Significant reduction in cloud storage costs
+- **Performance**: Kopia handles thousands of clients in a single repository efficiently
+
+**When Multiple Repositories Might Be Needed**:
+
+Only use separate repositories when you have clear requirements such as:
+
+- **Compliance**: Legal requirements for data separation (HIPAA, PCI-DSS, GDPR)
+- **Organizational boundaries**: Different departments with separate budgets
+- **Geographic constraints**: Data residency requirements
+- **Incompatible retention**: Vastly different retention policy requirements
+
+.. warning::
+   Avoid using bucket path prefixes like ``s3://bucket/app1`` and ``s3://bucket/app2``
+   unless absolutely necessary. This prevents deduplication between the paths and
+   increases storage costs.
+
 **Naming Strategies**
 
 **Environment-Based**:

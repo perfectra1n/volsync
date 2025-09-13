@@ -89,6 +89,11 @@ First, set up a repository configuration secret for your chosen storage backend.
 VolSync supports multiple storage options including S3, Azure Blob Storage, Google Cloud Storage,
 filesystem destinations via PVC, and many others.
 
+.. important::
+   **Best Practice**: Use a single Kopia repository (single S3 bucket without path prefixes)
+   for all your PVCs to maximize deduplication benefits. Kopia can achieve 50-80% storage
+   reduction when backing up similar workloads to the same repository.
+
 See :doc:`backends` for detailed configuration examples for all supported remote storage backends,
 or :doc:`filesystem-destination` for using PVCs as backup destinations.
 
@@ -155,7 +160,8 @@ Here's a complete example showing how to set up a basic Kopia backup:
      name: kopia-config
    type: Opaque
    stringData:
-     KOPIA_REPOSITORY: s3://my-backup-bucket/kopia-backups
+     # Single repository for ALL backups - no path prefix!
+     KOPIA_REPOSITORY: s3://my-backup-bucket
      KOPIA_PASSWORD: my-secure-password
      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
