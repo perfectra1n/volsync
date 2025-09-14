@@ -31,13 +31,32 @@
 # Users can override these by setting the environment variables in their
 # Kopia repository secret.
 
-echo "Starting container"
+echo "Starting kopia mover container"
 echo
 
 set -e -o pipefail
 
-echo "VolSync kopia container version: ${version:-unknown}"
-echo "$@"
+# Function to log with structured prefixes and respect log level
+log_info() {
+    echo "INFO: $*"
+}
+
+log_debug() {
+    if [[ "${KOPIA_FILE_LOG_LEVEL}" == "debug" ]]; then
+        echo "DEBUG: $*"
+    fi
+}
+
+log_error() {
+    echo "ERROR: $*" >&2
+}
+
+log_timing() {
+    echo "TIMING: $*"
+}
+
+log_info "VolSync kopia container version: ${version:-unknown}"
+log_info "Arguments: $@"
 echo
 
 SCRIPT_FULLPATH="$(realpath "$0")"
@@ -82,8 +101,11 @@ fi
 
 declare -a KOPIA
 # Set both cache and log directories to writable mounted location
+log_info "Setting cache directory: ${KOPIA_CACHE_DIR}"
 export KOPIA_CACHE_DIRECTORY="${KOPIA_CACHE_DIR}"
 export KOPIA_LOG_DIR="${KOPIA_CACHE_DIR}/logs"
+log_debug "KOPIA_CACHE_DIRECTORY set to: ${KOPIA_CACHE_DIRECTORY}"
+log_debug "KOPIA_LOG_DIR set to: ${KOPIA_LOG_DIR}"
 
 # Disable update checking
 export KOPIA_CHECK_FOR_UPDATES=false
@@ -112,8 +134,12 @@ export KOPIA_CONTENT_LOG_DIR_MAX_AGE="${KOPIA_CONTENT_LOG_DIR_MAX_AGE:-4h}"
 export KOPIA_FILE_LOG_LEVEL="${KOPIA_FILE_LOG_LEVEL:-info}"
 
 # Create necessary directories upfront
+log_info "Creating cache and log directories..."
+log_debug "Creating directory: ${KOPIA_CACHE_DIR}/logs"
 mkdir -p "${KOPIA_CACHE_DIR}/logs"
+log_debug "Setting permissions on: ${KOPIA_CACHE_DIR}/logs"
 chmod 755 "${KOPIA_CACHE_DIR}/logs"
+log_info "Cache and log directories created successfully"
 
 # DEBUG: Show environment and directory setup
 echo "=== DEBUG: Environment Setup ==="
@@ -184,8 +210,11 @@ if [[ -n "${CUSTOM_CA}" ]]; then
     # The KOPIA_CA_CERT environment variable is not used by Kopia for S3 connections
 fi
 
-echo "=== Kopia Version ==="
+log_info "=== Checking Kopia Version ==="
+KOPIA_START_TIME=$(date +%s)
 "${KOPIA[@]}" --version
+KOPIA_END_TIME=$(date +%s)
+log_timing "Kopia version check took $((KOPIA_END_TIME - KOPIA_START_TIME)) seconds"
 echo "====================="
 
 # Print an error message and exit
@@ -694,7 +723,8 @@ function apply_compression_policy {
 }
 
 function ensure_connected {
-    echo "=== Connecting to repository ==="
+    log_info "=== Starting repository connection process ==="
+    local connection_start_time=$(date +%s)
     
     # Apply JSON repository configuration first
     apply_json_repository_config
@@ -703,8 +733,12 @@ function ensure_connected {
     apply_manual_config
     
     # Try to connect to existing repository (let errors display naturally)
+    log_info "Checking existing repository connection status..."
+    local status_check_start=$(date +%s)
     if ! timeout 10s "${KOPIA[@]}" repository status >/dev/null 2>&1; then
-        echo "Repository not connected, attempting to connect or create..."
+        local status_check_end=$(date +%s)
+        log_timing "Repository status check took $((status_check_end - status_check_start)) seconds (not connected)"
+        log_info "Repository not connected, attempting to connect or create..."
         echo ""
         
         # Disable exit on error for connection attempts
@@ -712,9 +746,12 @@ function ensure_connected {
         
         # Try JSON config file first if available
         if [[ -n "${KOPIA_JSON_CONFIG_FILE}" && -f "${KOPIA_JSON_CONFIG_FILE}" ]]; then
-            echo "Attempting to connect using JSON configuration file..."
+            log_info "Attempting to connect using JSON configuration file..."
+            local json_connect_start=$(date +%s)
             "${KOPIA[@]}" repository connect from-config --file="${KOPIA_JSON_CONFIG_FILE}"
             local json_result=$?
+            local json_connect_end=$(date +%s)
+            log_timing "JSON config connection attempt took $((json_connect_end - json_connect_start)) seconds"
             
             if [[ $json_result -ne 0 ]]; then
                 echo "JSON config connection failed, trying other methods..."
@@ -728,21 +765,30 @@ function ensure_connected {
         
         # Try to connect from legacy config file
         if [[ -f /credentials/repository.config ]]; then
-            echo "Attempting to connect from config file..."
+            log_info "Attempting to connect from config file..."
+            local config_connect_start=$(date +%s)
             "${KOPIA[@]}" repository connect from-config --config-file /credentials/repository.config
             local config_result=$?
+            local config_connect_end=$(date +%s)
+            log_timing "Config file connection attempt took $((config_connect_end - config_connect_start)) seconds"
             
             if [[ $config_result -ne 0 ]]; then
-                echo "Config connection failed, trying direct connection..."
+                log_info "Config connection failed, trying direct connection..."
                 echo ""
+                local direct_connect_start=$(date +%s)
                 connect_repository
                 local direct_result=$?
+                local direct_connect_end=$(date +%s)
+                log_timing "Direct connection attempt took $((direct_connect_end - direct_connect_start)) seconds"
                 
                 if [[ $direct_result -ne 0 ]]; then
-                    echo "Direct connection failed, creating new repository..."
+                    log_info "Direct connection failed, creating new repository..."
                     echo ""
+                    local create_repo_start=$(date +%s)
                     create_repository
                     local create_result=$?
+                    local create_repo_end=$(date +%s)
+                    log_timing "Repository creation attempt took $((create_repo_end - create_repo_start)) seconds"
                     if [[ $create_result -ne 0 ]]; then
                         set -e  # Re-enable exit on error
                         error 1 "Failed to create repository"
@@ -770,13 +816,17 @@ function ensure_connected {
         # Re-enable exit on error
         set -e
     else
-        echo "Repository already connected"
+        local status_check_end=$(date +%s)
+        log_timing "Repository status check took $((status_check_end - status_check_start)) seconds (already connected)"
+        log_info "Repository already connected"
     fi
     
     echo ""
     
     # Set cache directory after successful connection
-    echo "=== Setting cache directory ==="
+    log_info "=== Configuring cache directory after connection ==="
+    log_debug "Cache directory path: ${KOPIA_CACHE_DIR}"
+    local cache_start_time=$(date +%s)
     declare -a CACHE_CMD
     CACHE_CMD=("${KOPIA[@]}" cache set --cache-directory="${KOPIA_CACHE_DIR}")
     
@@ -797,10 +847,16 @@ function ensure_connected {
         fi
     fi
     
+    log_debug "Executing cache command: ${CACHE_CMD[*]}"
     if ! "${CACHE_CMD[@]}"; then
         error 1 "Failed to set cache directory"
     fi
-    echo "Cache directory configured successfully"
+    local cache_end_time=$(date +%s)
+    log_timing "Cache directory configuration took $((cache_end_time - cache_start_time)) seconds"
+    log_info "Cache directory configured successfully at ${KOPIA_CACHE_DIR}"
+
+    local connection_end_time=$(date +%s)
+    log_timing "Total repository connection process took $((connection_end_time - connection_start_time)) seconds"
     echo ""
     
     # Apply policy configuration after connection
@@ -1257,7 +1313,8 @@ function create_repository {
 }
 
 function do_backup {
-    echo "=== Starting backup ==="
+    log_info "=== Starting backup operation ==="
+    local backup_start_time=$(date +%s)
     
     # Apply compression policy after connection but before backup
     if ! apply_compression_policy; then
@@ -1305,30 +1362,48 @@ function do_backup {
     
     # Create snapshot with error handling - ensure real-time progress output
     # Execute with explicit file descriptor handling to ensure real-time output
-    echo "Snapshotting ${KOPIA_OVERRIDE_USERNAME:-$(whoami)}@${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}:${KOPIA_SOURCE_PATH_OVERRIDE:-$DATA_DIR} ..."
+    log_info "Creating snapshot for ${KOPIA_OVERRIDE_USERNAME:-$(whoami)}@${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}:${KOPIA_SOURCE_PATH_OVERRIDE:-$DATA_DIR}"
+    log_debug "Snapshot command: ${SNAPSHOT_CMD[*]}"
+
+    local snapshot_start_time=$(date +%s)
+    log_info "Starting kopia snapshot creation..."
+
     if ! "${SNAPSHOT_CMD[@]}" </dev/null; then
+        local snapshot_end_time=$(date +%s)
+        log_timing "Snapshot creation failed after $((snapshot_end_time - snapshot_start_time)) seconds"
         error 1 "Failed to create snapshot"
     fi
-    
-    echo "Snapshot created successfully"
+
+    local snapshot_end_time=$(date +%s)
+    log_timing "Snapshot creation completed in $((snapshot_end_time - snapshot_start_time)) seconds"
+    log_info "Snapshot created successfully"
     
     # Run after-snapshot action if specified (check if actions are enabled)
     if [[ -n "${KOPIA_AFTER_SNAPSHOT}" ]] && [[ "${KOPIA_ACTIONS_ENABLED}" != "false" ]]; then
         if ! execute_action "${KOPIA_AFTER_SNAPSHOT}" "after-snapshot"; then
-            echo "WARNING: After-snapshot action failed, but snapshot was created successfully"
+            log_error "WARNING: After-snapshot action failed, but snapshot was created successfully"
             # Don't exit here since the snapshot was already created
         fi
     fi
+
+    local backup_end_time=$(date +%s)
+    log_timing "Total backup operation took $((backup_end_time - backup_start_time)) seconds"
 }
 
 function do_maintenance {
-    echo "=== Starting maintenance ==="
+    log_info "=== Starting maintenance operation ==="
+    local maint_start_time=$(date +%s)
+
+    log_debug "Running full maintenance: ${KOPIA[*]} maintenance run --full"
     if ! "${KOPIA[@]}" maintenance run --full; then
-        echo "Warning: Maintenance operation failed, but continuing"
+        log_error "Warning: Maintenance operation failed, but continuing"
         # Don't fail the entire operation for maintenance issues
         return 0
     fi
-    echo "Maintenance completed successfully"
+
+    local maint_end_time=$(date +%s)
+    log_timing "Maintenance operation took $((maint_end_time - maint_start_time)) seconds"
+    log_info "Maintenance completed successfully"
 }
 
 function do_retention {
@@ -1475,7 +1550,8 @@ function select_snapshot_to_restore {
 }
 
 function do_restore {
-    echo "=== Starting restore ==="
+    log_info "=== Starting restore operation ==="
+    local restore_start_time=$(date +%s)
     
     # Apply compression policy after connection (if set for destination)
     if ! apply_compression_policy; then
@@ -1540,18 +1616,29 @@ function do_restore {
     add_additional_args RESTORE_CMD
     
     # Execute the restore command
+    log_info "Executing restore command..."
+    log_debug "Restore command: ${RESTORE_CMD[*]}"
+
+    local restore_exec_start=$(date +%s)
     if ! "${RESTORE_CMD[@]}"; then
-        
+        local restore_exec_end=$(date +%s)
+        log_timing "Restore execution failed after $((restore_exec_end - restore_exec_start)) seconds"
+
         # If discovery mode is enabled and restore failed, show available snapshots
         if [[ "${KOPIA_DISCOVER_SNAPSHOTS}" == "true" ]]; then
-            echo "Failed to restore snapshot: ${snapshot_id}"
+            log_error "Failed to restore snapshot: ${snapshot_id}"
             discover_available_snapshots
         fi
-        
+
         error 1 "Failed to restore snapshot: ${snapshot_id}"
     fi
-    
-    echo "Snapshot restore completed successfully"
+
+    local restore_exec_end=$(date +%s)
+    log_timing "Restore execution took $((restore_exec_end - restore_exec_start)) seconds"
+
+    local restore_end_time=$(date +%s)
+    log_timing "Total restore operation took $((restore_end_time - restore_start_time)) seconds"
+    log_info "Snapshot restore completed successfully"
 }
 
 echo "Testing mandatory env variables"
@@ -1576,17 +1663,18 @@ echo ""
 export KOPIA_PASSWORD
 
 START_TIME=$SECONDS
+log_info "=== Starting kopia operations ==="
 
 # Determine operation based on DIRECTION or arguments
 if [[ "${DIRECTION}" == "source" ]]; then
-    echo "=== Running as SOURCE ==="
+    log_info "=== Running as SOURCE ===="
     check_contents
     ensure_connected
     do_backup
     do_retention
     do_maintenance
 elif [[ "${DIRECTION}" == "destination" ]]; then
-    echo "=== Running as DESTINATION ==="
+    log_info "=== Running as DESTINATION ===="
     ensure_connected
     do_restore
     sync -f "${DATA_DIR}"
@@ -1616,5 +1704,6 @@ else
     done
 fi
 
-echo "Kopia completed in $(( SECONDS - START_TIME ))s"
-echo "=== Done ==="
+log_timing "Total kopia operation completed in $(( SECONDS - START_TIME ))s"
+log_info "=== Operation finished ==="
+log_info "=== Done ==="
