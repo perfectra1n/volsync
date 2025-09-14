@@ -7,6 +7,12 @@ Storage Backends
 
 Kopia supports various storage backends with their respective configuration formats:
 
+.. tip::
+   **Having Connection Issues?**
+
+   Add ``KOPIA_FILE_LOG_LEVEL: "debug"`` to your repository secret for detailed
+   troubleshooting information. See :doc:`troubleshooting` for debugging guidance.
+
 .. important::
    **Repository Configuration Best Practice**
 

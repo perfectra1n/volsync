@@ -125,12 +125,24 @@ namespace as the hostname. This makes simple restores configuration-free.
 See :doc:`hostname-design` for understanding the intentional hostname design,
 and :doc:`multi-tenancy` for multi-tenancy configuration and customization options.
 
-**5. Troubleshooting**
+**5. Troubleshooting & Debugging**
 
-Leverage the enhanced error reporting and snapshot discovery features to quickly
-identify and resolve issues.
+.. important::
+   **Having Issues? Enable Debug Logging!**
 
-See :doc:`troubleshooting` for comprehensive debugging guidance.
+   Add ``KOPIA_FILE_LOG_LEVEL: "debug"`` to your repository secret for verbose logging:
+
+   .. code-block:: yaml
+
+      stringData:
+        KOPIA_FILE_LOG_LEVEL: "debug"  # Enable detailed debug output
+
+   See :doc:`troubleshooting` for complete debugging guidance, including:
+
+   - How to enable debug logging and control log retention
+   - Common issues quick reference
+   - Enhanced error reporting and snapshot discovery
+   - Preventing cache PVC from filling with logs
 
 **6. Advanced Customization**
 
@@ -166,6 +178,9 @@ Here's a complete example showing how to set up a basic Kopia backup:
      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
      AWS_S3_ENDPOINT: http://minio.minio.svc.cluster.local:9000
+
+     # Optional: Enable debug logging if having issues
+     # KOPIA_FILE_LOG_LEVEL: "debug"  # Options: error, warn, info, debug
 
 **Step 2: Create backup with policy**
 

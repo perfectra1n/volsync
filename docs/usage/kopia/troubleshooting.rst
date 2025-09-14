@@ -9,6 +9,99 @@ This guide provides comprehensive troubleshooting information for Kopia-based ba
 and restore operations in VolSync, with a focus on the enhanced error reporting and
 snapshot discovery features.
 
+Enable Debug Logging First!
+============================
+
+.. important::
+   **When experiencing issues, the FIRST step should be enabling debug logging.**
+
+   Debug logging provides detailed information about what the Kopia mover is doing,
+   making it much easier to identify where problems occur (especially hangs).
+
+Quick Steps to Enable Debug Logging
+------------------------------------
+
+1. **Edit your repository secret** to add debug logging:
+
+   .. code-block:: bash
+
+      kubectl edit secret kopia-config -n <namespace>
+
+2. **Add the following to the stringData section**:
+
+   .. code-block:: yaml
+
+      stringData:
+        # Your existing configuration...
+        KOPIA_REPOSITORY: s3://my-bucket
+        KOPIA_PASSWORD: my-password
+
+        # ADD THIS LINE for debug output:
+        KOPIA_FILE_LOG_LEVEL: "debug"
+
+3. **Trigger a new backup/restore** to apply the settings:
+
+   .. code-block:: bash
+
+      # For backup
+      kubectl patch replicationsource <name> -n <namespace> \
+        --type merge -p '{"spec":{"trigger":{"manual":"debug-now"}}}'
+
+      # For restore
+      kubectl patch replicationdestination <name> -n <namespace> \
+        --type merge -p '{"spec":{"trigger":{"manual":"debug-now"}}}'
+
+4. **View the debug logs**:
+
+   .. code-block:: bash
+
+      # Find the mover pod
+      kubectl get pods -l "volsync.backube/mover-job" -n <namespace>
+
+      # View logs with timestamps
+      kubectl logs <mover-pod> -n <namespace> --timestamps
+
+5. **Look for timing information** in the logs:
+
+   - Lines with ``TIMING:`` show operation durations
+   - Lines with ``DEBUG:`` show detailed execution steps
+   - Lines with ``INFO:`` show major operations
+   - Lines with ``ERROR:`` indicate failures
+
+What Debug Logging Shows
+------------------------
+
+With debug logging enabled, you'll see:
+
+- **Cache directory operations** - Where it often hangs with "setting cache directory"
+- **Repository connection attempts** - Each connection method and timing
+- **Snapshot operations** - Detailed progress during backup/restore
+- **Command execution** - Exact Kopia commands being run
+- **Timing metrics** - How long each operation takes
+
+.. warning::
+   **Remember to disable debug logging after troubleshooting!**
+
+   Debug logging can generate large log files. After resolving issues, remove or
+   comment out the ``KOPIA_FILE_LOG_LEVEL`` line or set it back to ``"info"``.
+
+Controlling Log Retention
+-------------------------
+
+To prevent cache PVC from filling with logs, you can also configure:
+
+.. code-block:: yaml
+
+   stringData:
+     # Debug logging for troubleshooting
+     KOPIA_FILE_LOG_LEVEL: "debug"
+
+     # Limit log retention (optional)
+     KOPIA_LOG_DIR_MAX_FILES: "5"    # Keep only 5 log files
+     KOPIA_LOG_DIR_MAX_AGE: "2h"     # Keep logs for 2 hours only
+
+See the :ref:`kopia-logging-configuration` section for complete logging configuration options.
+
 Quick Reference: Common Issues
 ===============================
 
@@ -40,6 +133,8 @@ This section provides quick solutions to the most common Kopia issues:
      - Check maintenance is running; policies only apply during maintenance
    * - Wrong data restored
      - Verify requestedIdentity; check if source used custom username/hostname
+   * - **Debugging any issue**
+     - **Enable debug logging: Add KOPIA_FILE_LOG_LEVEL: "debug" to repository secret**
    * - Cache PVC filling up with logs
      - Configure logging via KOPIA_FILE_LOG_LEVEL, KOPIA_LOG_DIR_MAX_FILES, KOPIA_LOG_DIR_MAX_AGE in repository secret
 
@@ -1400,6 +1495,8 @@ check if KOPIA_MANUAL_CONFIG can be used as a workaround:
    KOPIA_MANUAL_CONFIG is a low-level configuration option. Use with caution and
    test thoroughly before applying to production. Some settings may conflict with
    VolSync's automatic configuration.
+
+.. _kopia-logging-configuration:
 
 Kopia Logging Configuration
 ============================
