@@ -242,6 +242,16 @@ When to use custom configuration:
 - Complex multi-region setups
 - Legacy compatibility needs
 
+.. note::
+   **How Custom Identity Works**
+
+   When you specify custom ``username`` or ``hostname`` values:
+
+   1. They are set as ``KOPIA_OVERRIDE_USERNAME`` and ``KOPIA_OVERRIDE_HOSTNAME`` environment variables
+   2. These variables are used with ``--override-username`` and ``--override-hostname`` flags during ``kopia repository connect``
+   3. Once connected with the custom identity, all snapshots automatically use it
+   4. The override flags do NOT exist for ``kopia snapshot create`` (removed in Kopia v0.6.0)
+
 Repository Organization
 -----------------------
 

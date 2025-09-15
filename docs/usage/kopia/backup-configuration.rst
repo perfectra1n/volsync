@@ -60,6 +60,14 @@ hostname
    hostname, representing a single tenant. Combined with unique usernames (from object names),
    this ensures unique identities without collision risk. The namespace-only hostname design
    simplifies multi-tenancy and makes behavior predictable.
+
+   .. important::
+      The hostname override is applied at repository connection time through the
+      ``KOPIA_OVERRIDE_HOSTNAME`` environment variable, which translates to the
+      ``--override-hostname`` flag on ``kopia repository connect`` or ``create`` commands.
+      Once connected with the override identity, all snapshots automatically use that identity.
+      The ``--override-hostname`` flag does NOT exist for ``kopia snapshot create`` (removed in v0.6.0).
+
    See :doc:`multi-tenancy` for details on hostname generation.
 
 repository
@@ -91,8 +99,16 @@ username
    VolSync automatically generates a username from the ReplicationSource name.
    Combined with the namespace-based hostname, this creates a unique identity
    for each backup source. Since Kubernetes prevents duplicate object names
-   in a namespace, there's no risk of collision. See :doc:`multi-tenancy` for
-   details on username generation.
+   in a namespace, there's no risk of collision.
+
+   .. important::
+      The username override is applied at repository connection time through the
+      ``KOPIA_OVERRIDE_USERNAME`` environment variable, which translates to the
+      ``--override-username`` flag on ``kopia repository connect`` or ``create`` commands.
+      Once connected with the override identity, all snapshots automatically use that identity.
+      The ``--override-username`` flag does NOT exist for ``kopia snapshot create`` (removed in v0.6.0).
+
+   See :doc:`multi-tenancy` for details on username generation.
 
 Source Path Override
 --------------------
@@ -1867,7 +1883,7 @@ The following flags are **forbidden** for security reasons:
 - ``--password``, ``--config-file``, ``--config`` - Use secrets instead
 - ``--repository`` - Managed by VolSync
 - ``--cache-directory``, ``--log-dir`` - Managed by VolSync
-- ``--override-username``, ``--override-hostname`` - Use identity fields
+- ``--override-username``, ``--override-hostname`` - These flags don't exist for ``kopia snapshot create`` (removed in v0.6.0). Use the ``username`` and ``hostname`` fields instead, which apply the overrides at repository connection time
 - Credential flags (``--access-key``, ``--storage-account``, etc.) - Use secrets
 
 Example: Complete Backup with Additional Args
