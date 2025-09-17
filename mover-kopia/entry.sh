@@ -4,6 +4,11 @@
 #
 # Environment Variables for Log Configuration:
 # ---------------------------------------------
+# KOPIA_LOG_LEVEL - Set the log level for console/stdout output (default: matches KOPIA_FILE_LOG_LEVEL)
+#   Possible values: debug, info, warn, error
+#   Console logs appear in kubectl logs output
+#   This is what you see when running 'kubectl logs <pod-name>'
+#
 # KOPIA_FILE_LOG_LEVEL - Set the log level for file logs (default: info)
 #   Possible values: debug, info, warn, error
 #   Default 'info' provides good operational visibility
@@ -133,6 +138,11 @@ export KOPIA_CONTENT_LOG_DIR_MAX_AGE="${KOPIA_CONTENT_LOG_DIR_MAX_AGE:-4h}"
 # Users can set to 'debug' if troubleshooting, or 'warn' to reduce further
 export KOPIA_FILE_LOG_LEVEL="${KOPIA_FILE_LOG_LEVEL:-info}"
 
+# Set default console log level to info (independent of file log level)
+# This controls what appears in kubectl logs output
+# Users can set different verbosity for console vs files as needed
+export KOPIA_LOG_LEVEL="${KOPIA_LOG_LEVEL:-info}"
+
 # Create necessary directories upfront
 log_info "Creating cache and log directories..."
 log_debug "Creating directory: ${KOPIA_CACHE_DIR}/logs"
@@ -176,7 +186,8 @@ echo "KOPIA_ENABLE_FILE_DELETION: $([ -n "${KOPIA_ENABLE_FILE_DELETION}" ] && ec
 echo "KOPIA_ADDITIONAL_ARGS: $([ -n "${KOPIA_ADDITIONAL_ARGS}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo ""
 echo "=== Log Configuration ==="
-echo "KOPIA_FILE_LOG_LEVEL: ${KOPIA_FILE_LOG_LEVEL}"
+echo "KOPIA_LOG_LEVEL: ${KOPIA_LOG_LEVEL}"  # Console/stdout log level
+echo "KOPIA_FILE_LOG_LEVEL: ${KOPIA_FILE_LOG_LEVEL}"  # File log level
 echo "KOPIA_LOG_DIR_MAX_FILES: ${KOPIA_LOG_DIR_MAX_FILES}"
 echo "KOPIA_LOG_DIR_MAX_AGE: ${KOPIA_LOG_DIR_MAX_AGE}"
 echo "KOPIA_CONTENT_LOG_DIR_MAX_FILES: ${KOPIA_CONTENT_LOG_DIR_MAX_FILES}"
@@ -203,7 +214,7 @@ echo "GOOGLE_DRIVE_CREDENTIALS: $([ -n "${GOOGLE_DRIVE_CREDENTIALS}" ] && echo "
 echo "=== END DEBUG ==="
 echo ""
 
-KOPIA=("kopia" "--config-file=${KOPIA_CACHE_DIR}/kopia.config" "--log-dir=${KOPIA_CACHE_DIR}/logs" "--file-log-level=${KOPIA_FILE_LOG_LEVEL}" "--log-dir-max-files=${KOPIA_LOG_DIR_MAX_FILES}" "--log-dir-max-age=${KOPIA_LOG_DIR_MAX_AGE}")
+KOPIA=("kopia" "--config-file=${KOPIA_CACHE_DIR}/kopia.config" "--log-dir=${KOPIA_CACHE_DIR}/logs" "--log-level=${KOPIA_LOG_LEVEL}" "--file-log-level=${KOPIA_FILE_LOG_LEVEL}" "--log-dir-max-files=${KOPIA_LOG_DIR_MAX_FILES}" "--log-dir-max-age=${KOPIA_LOG_DIR_MAX_AGE}")
 if [[ -n "${CUSTOM_CA}" ]]; then
     echo "Using custom CA certificate at: ${CUSTOM_CA}"
     # Note: Custom CA is now handled via --root-ca-pem-path flag in S3 connect/create commands

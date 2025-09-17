@@ -130,12 +130,13 @@ and :doc:`multi-tenancy` for multi-tenancy configuration and customization optio
 .. important::
    **Having Issues? Enable Debug Logging!**
 
-   Add ``KOPIA_FILE_LOG_LEVEL: "debug"`` to your repository secret for verbose logging:
+   Add ``KOPIA_LOG_LEVEL: "debug"`` to your repository secret for verbose console logging:
 
    .. code-block:: yaml
 
       stringData:
-        KOPIA_FILE_LOG_LEVEL: "debug"  # Enable detailed debug output
+        KOPIA_LOG_LEVEL: "debug"      # Console output (kubectl logs)
+        KOPIA_FILE_LOG_LEVEL: "debug"  # File logs (optional)
 
    See :doc:`troubleshooting` for complete debugging guidance, including:
 
@@ -180,7 +181,8 @@ Here's a complete example showing how to set up a basic Kopia backup:
      AWS_S3_ENDPOINT: http://minio.minio.svc.cluster.local:9000
 
      # Optional: Enable debug logging if having issues
-     # KOPIA_FILE_LOG_LEVEL: "debug"  # Options: error, warn, info, debug
+     # KOPIA_LOG_LEVEL: "debug"      # Console logs visible in kubectl logs
+     # KOPIA_FILE_LOG_LEVEL: "debug"  # File logs saved to cache directory
 
 **Step 2: Create backup with policy**
 

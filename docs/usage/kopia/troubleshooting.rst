@@ -36,8 +36,9 @@ Quick Steps to Enable Debug Logging
         KOPIA_REPOSITORY: s3://my-bucket
         KOPIA_PASSWORD: my-password
 
-        # ADD THIS LINE for debug output:
-        KOPIA_FILE_LOG_LEVEL: "debug"
+        # ADD THESE LINES for debug output:
+        KOPIA_LOG_LEVEL: "debug"       # Shows logs in kubectl logs (console/stdout)
+        KOPIA_FILE_LOG_LEVEL: "debug"  # Saves logs to files in cache directory
 
 3. **Trigger a new backup/restore** to apply the settings:
 
@@ -82,8 +83,10 @@ With debug logging enabled, you'll see:
 .. warning::
    **Remember to disable debug logging after troubleshooting!**
 
-   Debug logging can generate large log files. After resolving issues, remove or
-   comment out the ``KOPIA_FILE_LOG_LEVEL`` line or set it back to ``"info"``.
+   Debug logging can generate large amounts of output. After resolving issues:
+
+   - Remove or set ``KOPIA_LOG_LEVEL`` back to ``"info"`` (for console logs)
+   - Remove or set ``KOPIA_FILE_LOG_LEVEL`` back to ``"info"`` or ``"error"`` (for file logs)
 
 Controlling Log Retention
 -------------------------
@@ -134,7 +137,9 @@ This section provides quick solutions to the most common Kopia issues:
    * - Wrong data restored
      - Verify requestedIdentity; check if source used custom username/hostname
    * - **Debugging any issue**
-     - **Enable debug logging: Add KOPIA_FILE_LOG_LEVEL: "debug" to repository secret**
+     - **Enable debug logging: Add KOPIA_LOG_LEVEL: "debug" to repository secret for console logs**
+   * - Want to see Kopia logs in kubectl logs
+     - Set KOPIA_LOG_LEVEL to desired level (debug, info, warn, error) in repository secret
    * - Cache PVC filling up with logs
      - Configure logging via KOPIA_FILE_LOG_LEVEL, KOPIA_LOG_DIR_MAX_FILES, KOPIA_LOG_DIR_MAX_AGE in repository secret
 
@@ -1501,7 +1506,7 @@ check if KOPIA_MANUAL_CONFIG can be used as a workaround:
 Kopia Logging Configuration
 ============================
 
-VolSync provides environment variables to control Kopia's file logging behavior, preventing the cache PVC from filling up with excessive logs. This is particularly important in Kubernetes environments where users typically rely on external logging solutions (Loki, ElasticSearch, Splunk, etc.) rather than file-based logs.
+VolSync provides environment variables to control Kopia's logging behavior, both for console output (what you see in ``kubectl logs``) and file logging (saved to the cache PVC). This is particularly important in Kubernetes environments where users typically rely on external logging solutions (Loki, ElasticSearch, Splunk, etc.) rather than file-based logs.
 
 The Problem: Cache PVC Filling Up
 ----------------------------------
@@ -1522,6 +1527,28 @@ The Problem: Cache PVC Filling Up
 - Manual intervention required to clean up logs
 - Wasted storage on redundant logging
 
+Understanding Console vs File Logging
+--------------------------------------
+
+Kopia supports two types of logging, each serving different purposes:
+
+**Console Logging (KOPIA_LOG_LEVEL)**
+   - Output goes to stdout/stderr
+   - Visible in ``kubectl logs`` output
+   - Captured by Kubernetes logging infrastructure
+   - Ideal for real-time debugging and monitoring
+   - No storage impact on cache PVC
+   - Automatically collected by external logging systems (Loki, ElasticSearch, etc.)
+
+**File Logging (KOPIA_FILE_LOG_LEVEL)**
+   - Saved to files in the cache directory (``/kopia/cache/logs``)
+   - Persists across pod restarts
+   - Can fill up cache PVC if not properly managed
+   - Useful for post-mortem analysis
+   - Requires manual cleanup or rotation settings
+
+**Best Practice for Kubernetes**: Use console logging (``KOPIA_LOG_LEVEL``) as your primary debugging tool since it integrates with Kubernetes native logging. File logging should be minimized to prevent cache PVC issues.
+
 Logging Configuration Environment Variables
 --------------------------------------------
 
@@ -1534,9 +1561,12 @@ VolSync exposes Kopia's native logging controls through environment variables th
    * - Variable
      - Default
      - Description
+   * - ``KOPIA_LOG_LEVEL``
+     - ``info``
+     - Log level for console/stdout logs (debug, info, warn, error). These logs appear in ``kubectl logs``. Independent of file log level
    * - ``KOPIA_FILE_LOG_LEVEL``
      - ``info``
-     - Log level for file logs (debug, info, warn, error). Provides good operational visibility without excessive verbosity
+     - Log level for file logs saved to cache directory (debug, info, warn, error). Provides good operational visibility without excessive verbosity
    * - ``KOPIA_LOG_DIR_MAX_FILES``
      - ``3``
      - Maximum number of CLI log files to retain. Optimized for Kubernetes where logs are externally collected
@@ -1579,8 +1609,9 @@ Override the default logging configuration by adding environment variables to yo
      KOPIA_PASSWORD: my-secure-password
      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-     
+
      # Minimal logging for production
+     KOPIA_LOG_LEVEL: "error"           # Only errors in kubectl logs
      KOPIA_FILE_LOG_LEVEL: "error"      # Only log errors to files
      KOPIA_LOG_DIR_MAX_FILES: "5"       # Keep only 5 log files
      KOPIA_LOG_DIR_MAX_AGE: "6h"        # Retain for 6 hours only
@@ -1600,20 +1631,21 @@ Override the default logging configuration by adding environment variables to yo
      KOPIA_PASSWORD: dev-password
      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-     
+
      # Verbose logging for debugging
-     KOPIA_FILE_LOG_LEVEL: "debug"      # Maximum verbosity
+     KOPIA_LOG_LEVEL: "debug"           # Maximum verbosity in kubectl logs
+     KOPIA_FILE_LOG_LEVEL: "debug"      # Maximum verbosity in files
      KOPIA_LOG_DIR_MAX_FILES: "20"      # Keep more files for analysis
      KOPIA_LOG_DIR_MAX_AGE: "7d"        # Keep logs for a week
 
-**Example: Disable File Logging Entirely**
+**Example: Console Logging Only (No File Logs)**
 
 .. code-block:: yaml
 
    apiVersion: v1
    kind: Secret
    metadata:
-     name: kopia-config-no-logs
+     name: kopia-config-console-only
    type: Opaque
    stringData:
      # Repository configuration
@@ -1621,9 +1653,10 @@ Override the default logging configuration by adding environment variables to yo
      KOPIA_PASSWORD: my-secure-password
      AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
      AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-     
-     # Effectively disable file logging
-     KOPIA_FILE_LOG_LEVEL: "error"      # Only critical errors
+
+     # Console logging only - ideal for Kubernetes
+     KOPIA_LOG_LEVEL: "info"            # Normal console output in kubectl logs
+     KOPIA_FILE_LOG_LEVEL: "error"      # Minimal file logging
      KOPIA_LOG_DIR_MAX_FILES: "1"       # Minimum possible
      KOPIA_LOG_DIR_MAX_AGE: "1h"        # Very short retention
 
@@ -1645,16 +1678,19 @@ To see how much space logs are using in your cache PVC:
    # List log files
    kubectl exec <mover-pod> -n <namespace> -- ls -lh /kopia/cache/logs
 
-**Monitoring Log Rotation**
+**Monitoring Log Configuration**
 
-Verify that log rotation is working:
+Verify that logging is configured correctly:
 
 .. code-block:: bash
 
    # Check mover pod environment variables
    kubectl describe pod <mover-pod> -n <namespace> | grep -E "KOPIA_(FILE_)?LOG"
-   
-   # Watch log directory over time
+
+   # View console logs (controlled by KOPIA_LOG_LEVEL)
+   kubectl logs <mover-pod> -n <namespace> --tail=50
+
+   # Watch log directory over time (file logs)
    kubectl exec <mover-pod> -n <namespace> -- ls -lt /kopia/cache/logs | head -10
 
 **Cleaning Up Existing Logs**
@@ -1677,7 +1713,8 @@ When troubleshooting issues, temporarily increase logging:
 
    # Temporarily update your secret for debugging
    stringData:
-     KOPIA_FILE_LOG_LEVEL: "debug"      # Increase verbosity
+     KOPIA_LOG_LEVEL: "debug"           # See detailed output in kubectl logs
+     KOPIA_FILE_LOG_LEVEL: "debug"      # Save detailed logs to files
      KOPIA_LOG_DIR_MAX_FILES: "20"      # Keep more files
      KOPIA_LOG_DIR_MAX_AGE: "48h"       # Keep for 2 days
 
@@ -1727,7 +1764,8 @@ Common Scenarios and Recommendations
 .. code-block:: yaml
 
    stringData:
-     KOPIA_FILE_LOG_LEVEL: "error"      # Minimize logging
+     KOPIA_LOG_LEVEL: "warn"            # Only warnings/errors in console
+     KOPIA_FILE_LOG_LEVEL: "error"      # Minimize file logging
      KOPIA_LOG_DIR_MAX_FILES: "5"       # Small rotation
      KOPIA_LOG_DIR_MAX_AGE: "6h"        # Short retention
 
@@ -1736,7 +1774,8 @@ Common Scenarios and Recommendations
 .. code-block:: yaml
 
    stringData:
-     KOPIA_FILE_LOG_LEVEL: "warn"       # Balanced logging
+     KOPIA_LOG_LEVEL: "info"            # Standard console logging
+     KOPIA_FILE_LOG_LEVEL: "warn"       # Balanced file logging
      KOPIA_LOG_DIR_MAX_FILES: "10"      # Moderate rotation
      KOPIA_LOG_DIR_MAX_AGE: "12h"       # Half-day retention
 
@@ -1745,7 +1784,8 @@ Common Scenarios and Recommendations
 .. code-block:: yaml
 
    stringData:
-     KOPIA_FILE_LOG_LEVEL: "info"       # Informative logging
+     KOPIA_LOG_LEVEL: "info"            # Informative console logging
+     KOPIA_FILE_LOG_LEVEL: "info"       # Informative file logging
      KOPIA_LOG_DIR_MAX_FILES: "20"      # Keep more history
      KOPIA_LOG_DIR_MAX_AGE: "3d"        # Several days retention
 
@@ -1754,7 +1794,8 @@ Common Scenarios and Recommendations
 .. code-block:: yaml
 
    stringData:
-     KOPIA_FILE_LOG_LEVEL: "info"       # More logging since no external collection
+     KOPIA_LOG_LEVEL: "info"            # Standard console output
+     KOPIA_FILE_LOG_LEVEL: "info"       # More file logging since no external collection
      KOPIA_LOG_DIR_MAX_FILES: "30"      # Extended history
      KOPIA_LOG_DIR_MAX_AGE: "7d"        # Week of logs for troubleshooting
 
@@ -1776,9 +1817,10 @@ If you're experiencing cache PVC issues with existing deployments:
 
       # Edit the secret
       kubectl edit secret kopia-config -n <namespace>
-      
+
       # Add the logging configuration
-      # KOPIA_FILE_LOG_LEVEL: "info"
+      # KOPIA_LOG_LEVEL: "info"          # Console logs (kubectl logs)
+      # KOPIA_FILE_LOG_LEVEL: "info"     # File logs
       # KOPIA_LOG_DIR_MAX_FILES: "3"
       # KOPIA_LOG_DIR_MAX_AGE: "4h"
 

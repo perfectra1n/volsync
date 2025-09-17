@@ -10,8 +10,9 @@ Kopia supports various storage backends with their respective configuration form
 .. tip::
    **Having Connection Issues?**
 
-   Add ``KOPIA_FILE_LOG_LEVEL: "debug"`` to your repository secret for detailed
-   troubleshooting information. See :doc:`troubleshooting` for debugging guidance.
+   Add ``KOPIA_LOG_LEVEL: "debug"`` to your repository secret for detailed
+   console output in kubectl logs, or ``KOPIA_FILE_LOG_LEVEL: "debug"`` for
+   file-based logs. See :doc:`troubleshooting` for debugging guidance.
 
 .. important::
    **Repository Configuration Best Practice**
@@ -754,8 +755,11 @@ VolSync's Kopia mover supports a comprehensive set of environment variables for 
 
 **Logging Control Variables**
 
+``KOPIA_LOG_LEVEL``
+   Log level for console/stdout logs visible in kubectl logs: debug, info, warn, error (default: info)
+
 ``KOPIA_FILE_LOG_LEVEL``
-   Log level for file logs: debug, info, warn, error (default: info)
+   Log level for file logs saved to cache directory: debug, info, warn, error (default: info)
 
 ``KOPIA_LOG_DIR_MAX_FILES``
    Maximum number of CLI log files to retain (default: 3)
