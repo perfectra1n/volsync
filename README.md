@@ -104,7 +104,7 @@ a `ReplicationDestination` example:
 Simple same-namespace restore (NO identity configuration needed):
 ```yaml
 # Use case: Restore in same namespace with matching destination name
-# ✅ NO sourceIdentity needed - fully automatic!
+# NO sourceIdentity needed - fully automatic!
 apiVersion: volsync.backube/v1alpha1
 kind: ReplicationDestination
 metadata:
@@ -114,7 +114,7 @@ spec:
   trigger:
     manual: restore-now
   kopia:
-    # ✅ NO IDENTITY CONFIGURATION NEEDED!
+    # NO IDENTITY CONFIGURATION NEEDED!
     # When destination name matches source name in same namespace:
     # - Automatically discovers: username = homepage-kopia
     # - Automatically uses: hostname = apps (always just namespace)
@@ -126,7 +126,7 @@ spec:
 Cross-namespace restore (sourceIdentity REQUIRED):
 ```yaml
 # Use case: Restore across namespaces or with different destination name
-# ⚠️ sourceIdentity REQUIRED for cross-namespace restores
+# sourceIdentity REQUIRED for cross-namespace restores
 apiVersion: volsync.backube/v1alpha1
 kind: ReplicationDestination
 metadata:
@@ -136,7 +136,7 @@ spec:
   trigger:
     manual: restore-test
   kopia:
-    # ⚠️ sourceIdentity REQUIRED because:
+    #   sourceIdentity REQUIRED because:
     #   - Source is in different namespace (apps ≠ test)
     #   - Destination name differs from source name
     sourceIdentity:
@@ -154,13 +154,13 @@ spec:
 ```
 
 When sourceIdentity is needed:
-- ⚠️ **Cross-namespace restores** (source and destination in different namespaces)
-- ⚠️ **Different destination name** (destination name ≠ source ReplicationSource name)
-- ⚠️ **Source used custom identity** (custom username/hostname in ReplicationSource)
+- **Cross-namespace restores** (source and destination in different namespaces)
+- **Different destination name** (destination name ≠ source ReplicationSource name)
+- **Source used custom identity** (custom username/hostname in ReplicationSource)
 
 When sourceIdentity is NOT needed:
-- ✅ **Same namespace + same name** (destination name = source name, same namespace)  
-- ✅ **Default source identity** (source used no custom username/hostname)
+- **Same namespace + same name** (destination name = source name, same namespace)  
+- **Default source identity** (source used no custom username/hostname)
 
 And a `repository` example:
 ```yaml
