@@ -782,7 +782,13 @@ function ensure_connected {
         if [[ -n "${KOPIA_JSON_CONFIG_FILE}" && -f "${KOPIA_JSON_CONFIG_FILE}" ]]; then
             log_info "Attempting to connect using JSON configuration file..."
             local json_connect_start=$(date +%s)
-            "${KOPIA[@]}" repository connect from-config --file="${KOPIA_JSON_CONFIG_FILE}"
+            # Build command array for JSON config connection
+            declare -a JSON_CONFIG_CMD
+            JSON_CONFIG_CMD=("${KOPIA[@]}" repository connect from-config --file="${KOPIA_JSON_CONFIG_FILE}")
+            # Add user overrides and additional args even for JSON config
+            add_user_overrides JSON_CONFIG_CMD
+            add_additional_args JSON_CONFIG_CMD
+            "${JSON_CONFIG_CMD[@]}"
             local json_result=$?
             local json_connect_end=$(date +%s)
             log_timing "JSON config connection attempt took $((json_connect_end - json_connect_start)) seconds"
@@ -801,7 +807,13 @@ function ensure_connected {
         if [[ -f /credentials/repository.config ]]; then
             log_info "Attempting to connect from config file..."
             local config_connect_start=$(date +%s)
-            "${KOPIA[@]}" repository connect from-config --config-file /credentials/repository.config
+            # Build command array for legacy config connection
+            declare -a LEGACY_CONFIG_CMD
+            LEGACY_CONFIG_CMD=("${KOPIA[@]}" repository connect from-config --config-file /credentials/repository.config)
+            # Add user overrides and additional args even for legacy config
+            add_user_overrides LEGACY_CONFIG_CMD
+            add_additional_args LEGACY_CONFIG_CMD
+            "${LEGACY_CONFIG_CMD[@]}"
             local config_result=$?
             local config_connect_end=$(date +%s)
             log_timing "Config file connection attempt took $((config_connect_end - config_connect_start)) seconds"
