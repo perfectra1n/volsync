@@ -206,6 +206,8 @@ echo "SFTP_USERNAME: $([ -n "${SFTP_USERNAME}" ] && echo "[SET]" || echo "[NOT S
 echo "SFTP_PASSWORD: $([ -n "${SFTP_PASSWORD}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "SFTP_PATH: $([ -n "${SFTP_PATH}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "SFTP_KEY_FILE: $([ -n "${SFTP_KEY_FILE}" ] && echo "[SET]" || echo "[NOT SET]")"
+echo "SFTP_KNOWN_HOSTS: $([ -n "${SFTP_KNOWN_HOSTS}" ] && echo "[SET]" || echo "[NOT SET]")"
+echo "SFTP_KNOWN_HOSTS_DATA: $([ -n "${SFTP_KNOWN_HOSTS_DATA}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "RCLONE_REMOTE_PATH: $([ -n "${RCLONE_REMOTE_PATH}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "RCLONE_EXE: $([ -n "${RCLONE_EXE}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "RCLONE_CONFIG: $([ -n "${RCLONE_CONFIG}" ] && echo "[SET]" || echo "[NOT SET]")"
@@ -320,6 +322,27 @@ function add_additional_args {
         
         echo "Added ${#ADDITIONAL_ARGS_ARRAY[@]} additional arguments"
     fi
+}
+
+# Execute repository connect or create command with all necessary additions
+# execute_repository_command command_array_name operation_type
+function execute_repository_command {
+    local -n cmd_array=$1
+    local operation_type=$2  # "connect" or "create"
+
+    # Always add user overrides (username/hostname)
+    add_user_overrides cmd_array
+
+    # For create operations, add manual config params
+    if [[ "${operation_type}" == "create" ]]; then
+        add_manual_config_params cmd_array
+    fi
+
+    # ALWAYS add additional arguments last
+    add_additional_args cmd_array
+
+    # Execute the command
+    "${cmd_array[@]}"
 }
 
 # Apply manual repository configuration from JSON if provided
@@ -987,28 +1010,23 @@ function connect_repository {
             S3_CONNECT_CMD+=(--root-ca-pem-path="${CUSTOM_CA}")
         fi
         
-        # Add username/hostname overrides if specified
-        add_user_overrides S3_CONNECT_CMD
-        
         echo "=== End S3 Connection Debug ==="
         echo ""
         echo "Executing connection command..."
-        "${S3_CONNECT_CMD[@]}"
+        execute_repository_command S3_CONNECT_CMD "connect"
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Connecting to Azure repository"
         AZURE_CONNECT_CMD=("${KOPIA[@]}" repository connect azure \
             --container="${KOPIA_AZURE_CONTAINER}" \
             --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
-        add_user_overrides AZURE_CONNECT_CMD
-        "${AZURE_CONNECT_CMD[@]}"
+        execute_repository_command AZURE_CONNECT_CMD "connect"
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Connecting to GCS repository"
         GCS_CONNECT_CMD=("${KOPIA[@]}" repository connect gcs \
             --bucket="${KOPIA_GCS_BUCKET}" \
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
-        add_user_overrides GCS_CONNECT_CMD
-        "${GCS_CONNECT_CMD[@]}"
+        execute_repository_command GCS_CONNECT_CMD "connect"
     elif [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
         echo "Connecting to filesystem repository"
         # Extract path from filesystem:// URL
@@ -1029,24 +1047,21 @@ function connect_repository {
         
         echo "Using filesystem path: ${FS_PATH}"
         FS_CONNECT_CMD=("${KOPIA[@]}" repository connect filesystem --path="${FS_PATH}")
-        add_user_overrides FS_CONNECT_CMD
-        "${FS_CONNECT_CMD[@]}"
+        execute_repository_command FS_CONNECT_CMD "connect"
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Connecting to Backblaze B2 repository"
         B2_CONNECT_CMD=("${KOPIA[@]}" repository connect b2 \
             --bucket="${KOPIA_B2_BUCKET}" \
             --key-id="${B2_ACCOUNT_ID}" \
             --key="${B2_APPLICATION_KEY}")
-        add_user_overrides B2_CONNECT_CMD
-        "${B2_CONNECT_CMD[@]}"
+        execute_repository_command B2_CONNECT_CMD "connect"
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Connecting to WebDAV repository"
         WEBDAV_CONNECT_CMD=("${KOPIA[@]}" repository connect webdav \
             --url="${WEBDAV_URL}" \
             --username="${WEBDAV_USERNAME}" \
             --password="${WEBDAV_PASSWORD}")
-        add_user_overrides WEBDAV_CONNECT_CMD
-        "${WEBDAV_CONNECT_CMD[@]}"
+        execute_repository_command WEBDAV_CONNECT_CMD "connect"
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Connecting to SFTP repository"
         SFTP_CONNECT_CMD=("${KOPIA[@]}" repository connect sftp \
@@ -1057,13 +1072,18 @@ function connect_repository {
             SFTP_CONNECT_CMD+=(--port="${SFTP_PORT}")
         fi
         if [[ -n "${SFTP_PASSWORD}" ]]; then
-            SFTP_CONNECT_CMD+=(--password="${SFTP_PASSWORD}")
+            SFTP_CONNECT_CMD+=(--sftp-password="${SFTP_PASSWORD}")
         fi
         if [[ -n "${SFTP_KEY_FILE}" ]]; then
             SFTP_CONNECT_CMD+=(--keyfile="${SFTP_KEY_FILE}")
         fi
-        add_user_overrides SFTP_CONNECT_CMD
-        "${SFTP_CONNECT_CMD[@]}"
+        if [[ -n "${SFTP_KNOWN_HOSTS}" ]]; then
+            SFTP_CONNECT_CMD+=(--known-hosts="${SFTP_KNOWN_HOSTS}")
+        fi
+        if [[ -n "${SFTP_KNOWN_HOSTS_DATA}" ]]; then
+            SFTP_CONNECT_CMD+=(--known-hosts-data="${SFTP_KNOWN_HOSTS_DATA}")
+        fi
+        execute_repository_command SFTP_CONNECT_CMD "connect"
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Connecting to Rclone repository"
         RCLONE_CONNECT_CMD=("${KOPIA[@]}" repository connect rclone \
@@ -1074,15 +1094,13 @@ function connect_repository {
         if [[ -n "${RCLONE_CONFIG}" ]]; then
             RCLONE_CONNECT_CMD+=(--rclone-config="${RCLONE_CONFIG}")
         fi
-        add_user_overrides RCLONE_CONNECT_CMD
-        "${RCLONE_CONNECT_CMD[@]}"
+        execute_repository_command RCLONE_CONNECT_CMD "connect"
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Connecting to Google Drive repository"
         GDRIVE_CONNECT_CMD=("${KOPIA[@]}" repository connect gdrive \
             --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
-        add_user_overrides GDRIVE_CONNECT_CMD
-        "${GDRIVE_CONNECT_CMD[@]}"
+        execute_repository_command GDRIVE_CONNECT_CMD "connect"
     else
         # Check if we have a generic filesystem:// URL that wasn't matched
         if [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
@@ -1211,33 +1229,23 @@ function create_repository {
             S3_CREATE_CMD+=(--root-ca-pem-path="${CUSTOM_CA}")
         fi
         
-        # Add username/hostname overrides if specified
-        add_user_overrides S3_CREATE_CMD
-        
-        # Add manual configuration parameters if specified
-        add_manual_config_params S3_CREATE_CMD
-        
         echo "=== End S3 Creation Debug ==="
         echo ""
         echo "Executing creation command..."
-        "${S3_CREATE_CMD[@]}"
+        execute_repository_command S3_CREATE_CMD "create"
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Creating Azure repository"
         AZURE_CREATE_CMD=("${KOPIA[@]}" repository create azure \
             --container="${KOPIA_AZURE_CONTAINER}" \
             --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
-        add_user_overrides AZURE_CREATE_CMD
-        add_manual_config_params AZURE_CREATE_CMD
-        "${AZURE_CREATE_CMD[@]}"
+        execute_repository_command AZURE_CREATE_CMD "create"
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Creating GCS repository"
         GCS_CREATE_CMD=("${KOPIA[@]}" repository create gcs \
             --bucket="${KOPIA_GCS_BUCKET}" \
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
-        add_user_overrides GCS_CREATE_CMD
-        add_manual_config_params GCS_CREATE_CMD
-        "${GCS_CREATE_CMD[@]}"
+        execute_repository_command GCS_CREATE_CMD "create"
     elif [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
         echo "Creating filesystem repository"
         # Extract path from filesystem:// URL
@@ -1258,27 +1266,21 @@ function create_repository {
         
         echo "Using filesystem path: ${FS_PATH}"
         FS_CREATE_CMD=("${KOPIA[@]}" repository create filesystem --path="${FS_PATH}")
-        add_user_overrides FS_CREATE_CMD
-        add_manual_config_params FS_CREATE_CMD
-        "${FS_CREATE_CMD[@]}"
+        execute_repository_command FS_CREATE_CMD "create"
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Creating Backblaze B2 repository"
         B2_CREATE_CMD=("${KOPIA[@]}" repository create b2 \
             --bucket="${KOPIA_B2_BUCKET}" \
             --key-id="${B2_ACCOUNT_ID}" \
             --key="${B2_APPLICATION_KEY}")
-        add_user_overrides B2_CREATE_CMD
-        add_manual_config_params B2_CREATE_CMD
-        "${B2_CREATE_CMD[@]}"
+        execute_repository_command B2_CREATE_CMD "create"
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Creating WebDAV repository"
         WEBDAV_CREATE_CMD=("${KOPIA[@]}" repository create webdav \
             --url="${WEBDAV_URL}" \
             --username="${WEBDAV_USERNAME}" \
             --password="${WEBDAV_PASSWORD}")
-        add_user_overrides WEBDAV_CREATE_CMD
-        add_manual_config_params WEBDAV_CREATE_CMD
-        "${WEBDAV_CREATE_CMD[@]}"
+        execute_repository_command WEBDAV_CREATE_CMD "create"
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Creating SFTP repository"
         SFTP_CREATE_CMD=("${KOPIA[@]}" repository create sftp \
@@ -1289,14 +1291,18 @@ function create_repository {
             SFTP_CREATE_CMD+=(--port="${SFTP_PORT}")
         fi
         if [[ -n "${SFTP_PASSWORD}" ]]; then
-            SFTP_CREATE_CMD+=(--password="${SFTP_PASSWORD}")
+            SFTP_CREATE_CMD+=(--sftp-password="${SFTP_PASSWORD}")
         fi
         if [[ -n "${SFTP_KEY_FILE}" ]]; then
             SFTP_CREATE_CMD+=(--keyfile="${SFTP_KEY_FILE}")
         fi
-        add_user_overrides SFTP_CREATE_CMD
-        add_manual_config_params SFTP_CREATE_CMD
-        "${SFTP_CREATE_CMD[@]}"
+        if [[ -n "${SFTP_KNOWN_HOSTS}" ]]; then
+            SFTP_CREATE_CMD+=(--known-hosts="${SFTP_KNOWN_HOSTS}")
+        fi
+        if [[ -n "${SFTP_KNOWN_HOSTS_DATA}" ]]; then
+            SFTP_CREATE_CMD+=(--known-hosts-data="${SFTP_KNOWN_HOSTS_DATA}")
+        fi
+        execute_repository_command SFTP_CREATE_CMD "create"
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Creating Rclone repository"
         RCLONE_CREATE_CMD=("${KOPIA[@]}" repository create rclone \
@@ -1307,17 +1313,13 @@ function create_repository {
         if [[ -n "${RCLONE_CONFIG}" ]]; then
             RCLONE_CREATE_CMD+=(--rclone-config="${RCLONE_CONFIG}")
         fi
-        add_user_overrides RCLONE_CREATE_CMD
-        add_manual_config_params RCLONE_CREATE_CMD
-        "${RCLONE_CREATE_CMD[@]}"
+        execute_repository_command RCLONE_CREATE_CMD "create"
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Creating Google Drive repository"
         GDRIVE_CREATE_CMD=("${KOPIA[@]}" repository create gdrive \
             --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
-        add_user_overrides GDRIVE_CREATE_CMD
-        add_manual_config_params GDRIVE_CREATE_CMD
-        "${GDRIVE_CREATE_CMD[@]}"
+        execute_repository_command GDRIVE_CREATE_CMD "create"
     else
         error 1 "No repository configuration found"
     fi
