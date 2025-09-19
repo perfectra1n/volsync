@@ -327,22 +327,23 @@ function add_additional_args {
 # Execute repository connect or create command with all necessary additions
 # execute_repository_command command_array_name operation_type
 function execute_repository_command {
-    local -n cmd_array=$1
+    local array_name=$1
+    local -n cmd_array_ref=$array_name
     local operation_type=$2  # "connect" or "create"
 
     # Always add user overrides (username/hostname)
-    add_user_overrides cmd_array
+    add_user_overrides "$array_name"
 
     # For create operations, add manual config params
     if [[ "${operation_type}" == "create" ]]; then
-        add_manual_config_params cmd_array
+        add_manual_config_params "$array_name"
     fi
 
     # ALWAYS add additional arguments last
-    add_additional_args cmd_array
+    add_additional_args "$array_name"
 
     # Execute the command
-    "${cmd_array[@]}"
+    "${cmd_array_ref[@]}"
 }
 
 # Apply manual repository configuration from JSON if provided
@@ -786,8 +787,8 @@ function ensure_connected {
             declare -a JSON_CONFIG_CMD
             JSON_CONFIG_CMD=("${KOPIA[@]}" repository connect from-config --file="${KOPIA_JSON_CONFIG_FILE}")
             # Add user overrides and additional args even for JSON config
-            add_user_overrides JSON_CONFIG_CMD
-            add_additional_args JSON_CONFIG_CMD
+            add_user_overrides "JSON_CONFIG_CMD"
+            add_additional_args "JSON_CONFIG_CMD"
             "${JSON_CONFIG_CMD[@]}"
             local json_result=$?
             local json_connect_end=$(date +%s)
@@ -811,8 +812,8 @@ function ensure_connected {
             declare -a LEGACY_CONFIG_CMD
             LEGACY_CONFIG_CMD=("${KOPIA[@]}" repository connect from-config --config-file /credentials/repository.config)
             # Add user overrides and additional args even for legacy config
-            add_user_overrides LEGACY_CONFIG_CMD
-            add_additional_args LEGACY_CONFIG_CMD
+            add_user_overrides "LEGACY_CONFIG_CMD"
+            add_additional_args "LEGACY_CONFIG_CMD"
             "${LEGACY_CONFIG_CMD[@]}"
             local config_result=$?
             local config_connect_end=$(date +%s)
@@ -1025,20 +1026,20 @@ function connect_repository {
         echo "=== End S3 Connection Debug ==="
         echo ""
         echo "Executing connection command..."
-        execute_repository_command S3_CONNECT_CMD "connect"
+        execute_repository_command "S3_CONNECT_CMD" "connect"
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Connecting to Azure repository"
         AZURE_CONNECT_CMD=("${KOPIA[@]}" repository connect azure \
             --container="${KOPIA_AZURE_CONTAINER}" \
             --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
-        execute_repository_command AZURE_CONNECT_CMD "connect"
+        execute_repository_command "AZURE_CONNECT_CMD" "connect"
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Connecting to GCS repository"
         GCS_CONNECT_CMD=("${KOPIA[@]}" repository connect gcs \
             --bucket="${KOPIA_GCS_BUCKET}" \
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
-        execute_repository_command GCS_CONNECT_CMD "connect"
+        execute_repository_command "GCS_CONNECT_CMD" "connect"
     elif [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
         echo "Connecting to filesystem repository"
         # Extract path from filesystem:// URL
@@ -1059,21 +1060,21 @@ function connect_repository {
         
         echo "Using filesystem path: ${FS_PATH}"
         FS_CONNECT_CMD=("${KOPIA[@]}" repository connect filesystem --path="${FS_PATH}")
-        execute_repository_command FS_CONNECT_CMD "connect"
+        execute_repository_command "FS_CONNECT_CMD" "connect"
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Connecting to Backblaze B2 repository"
         B2_CONNECT_CMD=("${KOPIA[@]}" repository connect b2 \
             --bucket="${KOPIA_B2_BUCKET}" \
             --key-id="${B2_ACCOUNT_ID}" \
             --key="${B2_APPLICATION_KEY}")
-        execute_repository_command B2_CONNECT_CMD "connect"
+        execute_repository_command "B2_CONNECT_CMD" "connect"
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Connecting to WebDAV repository"
         WEBDAV_CONNECT_CMD=("${KOPIA[@]}" repository connect webdav \
             --url="${WEBDAV_URL}" \
             --username="${WEBDAV_USERNAME}" \
             --password="${WEBDAV_PASSWORD}")
-        execute_repository_command WEBDAV_CONNECT_CMD "connect"
+        execute_repository_command "WEBDAV_CONNECT_CMD" "connect"
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Connecting to SFTP repository"
         SFTP_CONNECT_CMD=("${KOPIA[@]}" repository connect sftp \
@@ -1095,7 +1096,7 @@ function connect_repository {
         if [[ -n "${SFTP_KNOWN_HOSTS_DATA}" ]]; then
             SFTP_CONNECT_CMD+=(--known-hosts-data="${SFTP_KNOWN_HOSTS_DATA}")
         fi
-        execute_repository_command SFTP_CONNECT_CMD "connect"
+        execute_repository_command "SFTP_CONNECT_CMD" "connect"
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Connecting to Rclone repository"
         RCLONE_CONNECT_CMD=("${KOPIA[@]}" repository connect rclone \
@@ -1106,13 +1107,13 @@ function connect_repository {
         if [[ -n "${RCLONE_CONFIG}" ]]; then
             RCLONE_CONNECT_CMD+=(--rclone-config="${RCLONE_CONFIG}")
         fi
-        execute_repository_command RCLONE_CONNECT_CMD "connect"
+        execute_repository_command "RCLONE_CONNECT_CMD" "connect"
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Connecting to Google Drive repository"
         GDRIVE_CONNECT_CMD=("${KOPIA[@]}" repository connect gdrive \
             --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
-        execute_repository_command GDRIVE_CONNECT_CMD "connect"
+        execute_repository_command "GDRIVE_CONNECT_CMD" "connect"
     else
         # Check if we have a generic filesystem:// URL that wasn't matched
         if [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
@@ -1244,20 +1245,20 @@ function create_repository {
         echo "=== End S3 Creation Debug ==="
         echo ""
         echo "Executing creation command..."
-        execute_repository_command S3_CREATE_CMD "create"
+        execute_repository_command "S3_CREATE_CMD" "create"
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Creating Azure repository"
         AZURE_CREATE_CMD=("${KOPIA[@]}" repository create azure \
             --container="${KOPIA_AZURE_CONTAINER}" \
             --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
-        execute_repository_command AZURE_CREATE_CMD "create"
+        execute_repository_command "AZURE_CREATE_CMD" "create"
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Creating GCS repository"
         GCS_CREATE_CMD=("${KOPIA[@]}" repository create gcs \
             --bucket="${KOPIA_GCS_BUCKET}" \
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
-        execute_repository_command GCS_CREATE_CMD "create"
+        execute_repository_command "GCS_CREATE_CMD" "create"
     elif [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
         echo "Creating filesystem repository"
         # Extract path from filesystem:// URL
@@ -1278,21 +1279,21 @@ function create_repository {
         
         echo "Using filesystem path: ${FS_PATH}"
         FS_CREATE_CMD=("${KOPIA[@]}" repository create filesystem --path="${FS_PATH}")
-        execute_repository_command FS_CREATE_CMD "create"
+        execute_repository_command "FS_CREATE_CMD" "create"
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Creating Backblaze B2 repository"
         B2_CREATE_CMD=("${KOPIA[@]}" repository create b2 \
             --bucket="${KOPIA_B2_BUCKET}" \
             --key-id="${B2_ACCOUNT_ID}" \
             --key="${B2_APPLICATION_KEY}")
-        execute_repository_command B2_CREATE_CMD "create"
+        execute_repository_command "B2_CREATE_CMD" "create"
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Creating WebDAV repository"
         WEBDAV_CREATE_CMD=("${KOPIA[@]}" repository create webdav \
             --url="${WEBDAV_URL}" \
             --username="${WEBDAV_USERNAME}" \
             --password="${WEBDAV_PASSWORD}")
-        execute_repository_command WEBDAV_CREATE_CMD "create"
+        execute_repository_command "WEBDAV_CREATE_CMD" "create"
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Creating SFTP repository"
         SFTP_CREATE_CMD=("${KOPIA[@]}" repository create sftp \
@@ -1314,7 +1315,7 @@ function create_repository {
         if [[ -n "${SFTP_KNOWN_HOSTS_DATA}" ]]; then
             SFTP_CREATE_CMD+=(--known-hosts-data="${SFTP_KNOWN_HOSTS_DATA}")
         fi
-        execute_repository_command SFTP_CREATE_CMD "create"
+        execute_repository_command "SFTP_CREATE_CMD" "create"
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Creating Rclone repository"
         RCLONE_CREATE_CMD=("${KOPIA[@]}" repository create rclone \
@@ -1325,13 +1326,13 @@ function create_repository {
         if [[ -n "${RCLONE_CONFIG}" ]]; then
             RCLONE_CREATE_CMD+=(--rclone-config="${RCLONE_CONFIG}")
         fi
-        execute_repository_command RCLONE_CREATE_CMD "create"
+        execute_repository_command "RCLONE_CREATE_CMD" "create"
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Creating Google Drive repository"
         GDRIVE_CREATE_CMD=("${KOPIA[@]}" repository create gdrive \
             --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
-        execute_repository_command GDRIVE_CREATE_CMD "create"
+        execute_repository_command "GDRIVE_CREATE_CMD" "create"
     else
         error 1 "No repository configuration found"
     fi
