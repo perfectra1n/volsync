@@ -745,6 +745,8 @@ func (m *Mover) buildSFTPEnvironmentVariables(repo *corev1.Secret) []corev1.EnvV
 		utils.EnvFromSecret(repo.Name, "SFTP_PASSWORD", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_PATH", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_KEY_FILE", true),
+		utils.EnvFromSecret(repo.Name, "SFTP_KNOWN_HOSTS", true),
+		utils.EnvFromSecret(repo.Name, "SFTP_KNOWN_HOSTS_DATA", true),
 	}
 }
 
