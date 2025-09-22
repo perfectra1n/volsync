@@ -80,6 +80,7 @@ spec:
       weekly: 4
       monthly: 3
       yearly: 1
+      latest: 50  # Keep N most recent snapshots (useful for high-frequency backups)
     
     # Optional: Compression algorithm (zstd, gzip, s2, none)
     compression: "zstd"

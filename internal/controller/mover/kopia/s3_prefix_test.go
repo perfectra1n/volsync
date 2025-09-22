@@ -31,11 +31,11 @@ import (
 // TestS3PrefixHandling tests various S3 prefix configuration scenarios
 func TestS3PrefixHandling(t *testing.T) {
 	tests := []struct {
-		name                  string
-		secretData            map[string][]byte
-		expectedEnvVars       map[string]string
-		unexpectedEnvVars     []string
-		description           string
+		name              string
+		secretData        map[string][]byte
+		expectedEnvVars   map[string]string
+		unexpectedEnvVars []string
+		description       string
 	}{
 		{
 			name: "S3 repository URL with prefix only",
@@ -58,7 +58,7 @@ func TestS3PrefixHandling(t *testing.T) {
 			secretData: map[string][]byte{
 				"KOPIA_REPOSITORY":      []byte("s3://mybucket/myprefix/subdir"),
 				"KOPIA_PASSWORD":        []byte("password"),
-				"KOPIA_S3_BUCKET":      []byte("differentbucket"),
+				"KOPIA_S3_BUCKET":       []byte("differentbucket"),
 				"AWS_ACCESS_KEY_ID":     []byte("AKIAIOSFODNN7EXAMPLE"),
 				"AWS_SECRET_ACCESS_KEY": []byte("wJalrXUtnFEMI/K7MDENG"),
 			},
@@ -73,7 +73,7 @@ func TestS3PrefixHandling(t *testing.T) {
 			secretData: map[string][]byte{
 				"KOPIA_REPOSITORY":      []byte("s3://ignoredbucket"),
 				"KOPIA_PASSWORD":        []byte("password"),
-				"KOPIA_S3_BUCKET":      []byte("mybucket"),
+				"KOPIA_S3_BUCKET":       []byte("mybucket"),
 				"AWS_ACCESS_KEY_ID":     []byte("AKIAIOSFODNN7EXAMPLE"),
 				"AWS_SECRET_ACCESS_KEY": []byte("wJalrXUtnFEMI/K7MDENG"),
 			},

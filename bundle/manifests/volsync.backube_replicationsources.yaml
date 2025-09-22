@@ -1,9 +1,9 @@
----
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.3
+  creationTimestamp: null
   name: replicationsources.volsync.backube
 spec:
   group: volsync.backube
@@ -1493,6 +1493,11 @@ spec:
                       hourly:
                         description: Hourly defines the number of snapshots to be
                           kept hourly
+                        format: int32
+                        type: integer
+                      latest:
+                        description: Latest defines the number of latest snapshots
+                          to keep
                         format: int32
                         type: integer
                       monthly:
@@ -7192,3 +7197,9 @@ spec:
     storage: true
     subresources:
       status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

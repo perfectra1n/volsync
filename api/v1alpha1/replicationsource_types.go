@@ -241,6 +241,9 @@ type KopiaRetainPolicy struct {
 	// Yearly defines the number of snapshots to be kept yearly
 	//+optional
 	Yearly *int32 `json:"yearly,omitempty"`
+	// Latest defines the number of latest snapshots to keep
+	//+optional
+	Latest *int32 `json:"latest,omitempty"`
 }
 
 // KopiaActions defines pre/post snapshot actions
@@ -271,7 +274,8 @@ type ReplicationSourceKopiaSpec struct {
 	// Users can use 'kopia benchmark compression' to test which algorithm works best for their data.
 	//
 	// Supported algorithms (as of Kopia documentation):
-	// - s2 variants: s2-default, s2-better, s2-parallel-4, s2-parallel-8 (s2-parallel-n supports various concurrency levels)
+	// - s2 variants: s2-default, s2-better, s2-parallel-4, s2-parallel-8
+	//   (s2-parallel-n supports various concurrency levels)
 	// - zstd variants: zstd (standard), zstd-fastest, zstd-better-compression, zstd-best-compression
 	// - gzip variants: gzip, gzip-best-speed, gzip-best-compression
 	// - pgzip variants (parallel gzip): pgzip, pgzip-best-speed, pgzip-best-compression

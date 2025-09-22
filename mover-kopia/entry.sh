@@ -1454,7 +1454,10 @@ function do_retention {
     if [[ -n "${KOPIA_RETAIN_YEARLY}" ]]; then
         POLICY_CMD+=(--keep-annual="${KOPIA_RETAIN_YEARLY}")
     fi
-    
+    if [[ -n "${KOPIA_RETAIN_LATEST}" ]]; then
+        POLICY_CMD+=(--keep-latest="${KOPIA_RETAIN_LATEST}")
+    fi
+
     # Apply policy if any retention options are set
     if [[ ${#POLICY_CMD[@]} -gt 4 ]]; then
         if ! "${POLICY_CMD[@]}"; then

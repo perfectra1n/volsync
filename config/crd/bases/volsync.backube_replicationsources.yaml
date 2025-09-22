@@ -1495,6 +1495,11 @@ spec:
                           kept hourly
                         format: int32
                         type: integer
+                      latest:
+                        description: Latest defines the number of latest snapshots
+                          to keep
+                        format: int32
+                        type: integer
                       monthly:
                         description: Monthly defines the number of snapshots to be
                           kept monthly

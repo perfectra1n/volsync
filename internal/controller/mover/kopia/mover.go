@@ -97,7 +97,6 @@ func (p *PolicyConfigConfigMap) GetVolumeSource(_ string) corev1.VolumeSource {
 	}
 }
 
-
 // Mover is the reconciliation logic for the Kopia-based data mover.
 type Mover struct {
 	client                client.Client
@@ -843,10 +842,10 @@ func (m *Mover) addDestinationEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 	if m.enableFileDeletionOnRestore {
 		envVars = append(envVars, corev1.EnvVar{Name: "KOPIA_ENABLE_FILE_DELETION", Value: "true"})
 	}
-	
+
 	// Add additional args if specified
 	envVars = m.addAdditionalArgsEnvVar(envVars)
-	
+
 	return envVars
 }
 
@@ -876,6 +875,10 @@ func (m *Mover) addRetentionPolicyEnvVars(envVars []corev1.EnvVar) []corev1.EnvV
 		envVars = append(envVars, corev1.EnvVar{
 			Name: "KOPIA_RETAIN_YEARLY", Value: strconv.Itoa(int(*m.retainPolicy.Yearly))})
 	}
+	if m.retainPolicy.Latest != nil {
+		envVars = append(envVars, corev1.EnvVar{
+			Name: "KOPIA_RETAIN_LATEST", Value: strconv.Itoa(int(*m.retainPolicy.Latest))})
+	}
 	return envVars
 }
 
@@ -894,28 +897,21 @@ func (m *Mover) addActionsEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 	return envVars
 }
 
-// validateAdditionalArgs validates that additional arguments are valid
-func (m *Mover) validateAdditionalArgs() error {
-	// No validation - allow users to use any Kopia flags they need
-	// Users are responsible for providing valid flags
-	return nil
-}
-
 // addAdditionalArgsEnvVar adds additional arguments as an environment variable
 func (m *Mover) addAdditionalArgsEnvVar(envVars []corev1.EnvVar) []corev1.EnvVar {
 	if len(m.additionalArgs) == 0 {
 		return envVars
 	}
-	
+
 	// Join all additional args with a special delimiter that's unlikely to appear in args
 	// We'll use "|VOLSYNC_ARG_SEP|" as the delimiter
 	argsString := strings.Join(m.additionalArgs, "|VOLSYNC_ARG_SEP|")
-	
+
 	envVars = append(envVars, corev1.EnvVar{
 		Name:  "KOPIA_ADDITIONAL_ARGS",
 		Value: argsString,
 	})
-	
+
 	return envVars
 }
 
@@ -1642,6 +1638,10 @@ func (m *Mover) recordPolicyCompliance() {
 		}
 		if m.retainPolicy.Yearly != nil {
 			retentionLabels["retention_type"] = "yearly"
+			m.metrics.RetentionCompliance.With(retentionLabels).Set(1)
+		}
+		if m.retainPolicy.Latest != nil {
+			retentionLabels["retention_type"] = "latest"
 			m.metrics.RetentionCompliance.With(retentionLabels).Set(1)
 		}
 	}
