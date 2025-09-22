@@ -138,10 +138,10 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 		It("should update metrics based on maintenance status", func() {
 			durationStr := "120s"
 			status := &MaintenanceStatus{
-				Configured:         true,
-				LastSuccessfulTime: &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+				Configured:               true,
+				LastSuccessfulTime:       &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
 				FailuresSinceLastSuccess: 2,
-				LastMaintenanceDuration: &durationStr,
+				LastMaintenanceDuration:  &durationStr,
 			}
 
 			// Update metrics

@@ -308,8 +308,8 @@ func TestMaintenanceManager(t *testing.T) {
 			t.Errorf("Expected CPU limit to be 500m, got %s", cpuLimit)
 		}
 
-		if memLimit != "512Mi" {
-			t.Errorf("Expected memory limit to be 512Mi, got %s", memLimit)
+		if memLimit != "1Gi" {
+			t.Errorf("Expected memory limit to be 1Gi, got %s", memLimit)
 		}
 
 		// Verify resource requests remain unchanged

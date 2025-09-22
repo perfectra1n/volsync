@@ -399,9 +399,9 @@ var (
 
 	maintenanceDurationSeconds = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
-			Name:       "maintenance_duration_seconds",
+			Name:       "maintenance_job_duration_seconds",
 			Namespace:  kopiaMetricsNamespace,
-			Help:       "Duration of maintenance operations in seconds (from job logs)",
+			Help:       "Duration of maintenance CronJob operations in seconds (from job logs)",
 			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 			MaxAge:     7 * 24 * time.Hour, // Keep for a week since maintenance is less frequent
 		},

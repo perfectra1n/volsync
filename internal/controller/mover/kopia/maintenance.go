@@ -122,7 +122,7 @@ func (m *MaintenanceManager) ReconcileMaintenanceForSource(ctx context.Context,
 		return fmt.Errorf("ReplicationSource namespace is required but was empty")
 	}
 	if source.Spec.Kopia.Repository == "" {
-		return fmt.Errorf("Kopia repository configuration is required but was empty")
+		return fmt.Errorf("kopia repository configuration is required but was empty")
 	}
 
 	// Check if maintenance is disabled
@@ -299,7 +299,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 							},
 						},
 						Spec: corev1.PodSpec{
-							ServiceAccountName: m.getOrCreateServiceAccountName(repoConfig),
+							ServiceAccountName: m.getOrCreateServiceAccountName(),
 							RestartPolicy:      corev1.RestartPolicyOnFailure,
 							SecurityContext: &corev1.PodSecurityContext{
 								RunAsNonRoot: ptr.To(true),
@@ -312,7 +312,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 									Image:           m.containerImage,
 									ImagePullPolicy: corev1.PullIfNotPresent,
 									Command:         []string{"/bin/bash", "-c"},
-									Args:            []string{"/entry.sh maintenance"},
+									Args:            []string{"/mover-kopia/entry.sh maintenance"},
 									Env:             envVars,
 									EnvFrom: []corev1.EnvFromSource{
 										{
@@ -323,8 +323,8 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 											},
 										},
 									},
-									VolumeMounts:    volumeMounts,
-									Resources:       resources,
+									VolumeMounts: volumeMounts,
+									Resources:    resources,
 									SecurityContext: &corev1.SecurityContext{
 										AllowPrivilegeEscalation: ptr.To(false),
 										Capabilities: &corev1.Capabilities{
@@ -371,11 +371,11 @@ func (m *MaintenanceManager) buildMaintenanceEnvVars(repoConfig *RepositoryConfi
 			Value: "/data", // Not used for maintenance, but required by entry.sh
 		},
 		{
-			Name:  "KOPIA_OVERRIDE_USERNAME",
+			Name:  envKopiaOverrideUsername,
 			Value: defaultMaintenanceUsername,
 		},
 		{
-			Name:  "KOPIA_OVERRIDE_HOSTNAME",
+			Name:  envKopiaOverrideHostname,
 			Value: repoConfig.Namespace,
 		},
 	}
@@ -525,19 +525,22 @@ func (m *MaintenanceManager) getMaintenanceSchedule(source *volsyncv1alpha1.Repl
 	// Fall back to converting maintenanceIntervalDays to a schedule if specified
 	if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceIntervalDays != nil {
 		days := *source.Spec.Kopia.MaintenanceIntervalDays
-		if days > 0 {
-			// Convert days to cron schedule
-			if days == 1 {
-				return "0 2 * * *" // Daily at 2 AM
-			} else if days == 7 {
-				return "0 2 * * 0" // Weekly on Sunday at 2 AM
-			} else if days == 30 || days == 31 {
-				return "0 2 1 * *" // Monthly on the 1st at 2 AM
-			} else {
-				// For other values, use daily schedule
-				// The actual interval check will be handled by the maintenance job
-				return "0 2 * * *"
-			}
+		if days <= 0 {
+			return defaultMaintenanceSchedule
+		}
+
+		// Convert days to cron schedule
+		switch days {
+		case 1:
+			return "0 2 * * *" // Daily at 2 AM
+		case 7:
+			return "0 2 * * 0" // Weekly on Sunday at 2 AM
+		case 30, 31:
+			return "0 2 1 * *" // Monthly on the 1st at 2 AM
+		default:
+			// For other values, use daily schedule
+			// The actual interval check will be handled by the maintenance job
+			return "0 2 * * *"
 		}
 	}
 
@@ -546,7 +549,7 @@ func (m *MaintenanceManager) getMaintenanceSchedule(source *volsyncv1alpha1.Repl
 }
 
 // getOrCreateServiceAccountName returns the service account name for maintenance
-func (m *MaintenanceManager) getOrCreateServiceAccountName(repoConfig *RepositoryConfig) string {
+func (m *MaintenanceManager) getOrCreateServiceAccountName() string {
 	// For now, return a standard name. In the future, we might create a dedicated SA
 	// The SA should have minimal permissions (just access to secrets/configmaps for repo config)
 	return maintenanceServiceAccountName
@@ -721,12 +724,12 @@ func (m *MaintenanceManager) GetMaintenanceStatus(ctx context.Context,
 	}
 
 	status := &MaintenanceStatus{
-		Configured:         true,
-		CronJobName:        cronJob.Name,
-		Schedule:           cronJob.Spec.Schedule,
-		NextScheduledTime:  nil,
-		LastScheduledTime:  cronJob.Status.LastScheduleTime,
-		LastSuccessfulTime: nil,
+		Configured:               true,
+		CronJobName:              cronJob.Name,
+		Schedule:                 cronJob.Spec.Schedule,
+		NextScheduledTime:        nil,
+		LastScheduledTime:        cronJob.Status.LastScheduleTime,
+		LastSuccessfulTime:       nil,
 		FailuresSinceLastSuccess: 0,
 	}
 
@@ -767,7 +770,7 @@ type MaintenanceStatus struct {
 }
 
 // getMaintenanceJobs retrieves all maintenance jobs for a repository
-func (m *MaintenanceManager) getMaintenanceJobs(ctx context.Context, namespace, repoHash string) ([]batchv1.Job, error) {
+func (m *MaintenanceManager) getMaintenanceJobs(ctx context.Context, namespace, repoHash string) ([]batchv1.Job, error) { //nolint:lll
 	jobList := &batchv1.JobList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(namespace),
@@ -893,7 +896,7 @@ func (m *MaintenanceManager) calculateNextScheduledTime(schedule string, lastTim
 }
 
 // updateMaintenanceMetrics updates Prometheus metrics based on maintenance status
-func (m *MaintenanceManager) updateMaintenanceMetrics(source *volsyncv1alpha1.ReplicationSource, status *MaintenanceStatus) {
+func (m *MaintenanceManager) updateMaintenanceMetrics(source *volsyncv1alpha1.ReplicationSource, status *MaintenanceStatus) { //nolint:lll
 	labels := prometheus.Labels{
 		"obj_name":      source.Name,
 		"obj_namespace": source.Namespace,
@@ -910,11 +913,11 @@ func (m *MaintenanceManager) updateMaintenanceMetrics(source *volsyncv1alpha1.Re
 	// Record failures
 	if status.FailuresSinceLastSuccess > 0 {
 		failureLabels := prometheus.Labels{
-			"obj_name":      source.Name,
-			"obj_namespace": source.Namespace,
-			"role":          "source",
-			"operation":     "maintenance",
-			"repository":    source.Spec.Kopia.Repository,
+			"obj_name":       source.Name,
+			"obj_namespace":  source.Namespace,
+			"role":           "source",
+			"operation":      "maintenance",
+			"repository":     source.Spec.Kopia.Repository,
 			"failure_reason": "maintenance_job_failed",
 		}
 		// Only increment once per check, not for each failure
@@ -935,7 +938,7 @@ func (m *MaintenanceManager) updateMaintenanceMetrics(source *volsyncv1alpha1.Re
 }
 
 // ParseMaintenanceLogs parses maintenance job logs to extract metrics
-func (m *MaintenanceManager) ParseMaintenanceLogs(ctx context.Context, job *batchv1.Job) (*MaintenanceLogMetrics, error) {
+func (m *MaintenanceManager) ParseMaintenanceLogs(job *batchv1.Job) (*MaintenanceLogMetrics, error) {
 	// This would typically read pod logs and parse them for specific patterns
 	// For now, return a placeholder implementation
 
@@ -955,11 +958,11 @@ func (m *MaintenanceManager) ParseMaintenanceLogs(ctx context.Context, job *batc
 
 // MaintenanceLogMetrics contains metrics extracted from maintenance logs
 type MaintenanceLogMetrics struct {
-	Status             string
-	DurationSeconds    int
+	Status              string
+	DurationSeconds     int
 	RepositorySizeBytes int64
-	ContentCount       int
-	BlobCount          int
-	DeduplicationRatio float64
-	Error              string
+	ContentCount        int
+	BlobCount           int
+	DeduplicationRatio  float64
+	Error               string
 }

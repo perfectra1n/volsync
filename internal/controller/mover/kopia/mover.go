@@ -67,6 +67,11 @@ const (
 	defaultRepoConfigFile   = "repository.config"
 	operationBackup         = "backup"
 	operationRestore        = "restore"
+	// Environment variable names for Kopia configuration
+	envKopiaOverrideUsername = "KOPIA_OVERRIDE_USERNAME"
+	envKopiaOverrideHostname = "KOPIA_OVERRIDE_HOSTNAME"
+	envSftpPassword          = "SFTP_PASSWORD"
+	envKopiaAdditionalArgs   = "KOPIA_ADDITIONAL_ARGS"
 )
 
 // PolicyConfigSecret wraps a Secret for policy configuration mounting
@@ -751,7 +756,7 @@ func (m *Mover) buildSFTPEnvironmentVariables(repo *corev1.Secret) []corev1.EnvV
 		utils.EnvFromSecret(repo.Name, "SFTP_HOST", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_PORT", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_USERNAME", true),
-		utils.EnvFromSecret(repo.Name, "SFTP_PASSWORD", true),
+		utils.EnvFromSecret(repo.Name, envSftpPassword, true),
 		utils.EnvFromSecret(repo.Name, "SFTP_PATH", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_KEY_FILE", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_KNOWN_HOSTS", true),
@@ -777,11 +782,11 @@ func (m *Mover) addIdentityEnvironmentVariables(envVars []corev1.EnvVar) []corev
 
 	envVars = append(envVars,
 		corev1.EnvVar{
-			Name:  "KOPIA_OVERRIDE_USERNAME",
+			Name:  envKopiaOverrideUsername,
 			Value: m.username,
 		},
 		corev1.EnvVar{
-			Name:  "KOPIA_OVERRIDE_HOSTNAME",
+			Name:  envKopiaOverrideHostname,
 			Value: m.hostname,
 		},
 	)
@@ -918,7 +923,7 @@ func (m *Mover) addAdditionalArgsEnvVar(envVars []corev1.EnvVar) []corev1.EnvVar
 	argsString := strings.Join(m.additionalArgs, "|VOLSYNC_ARG_SEP|")
 
 	envVars = append(envVars, corev1.EnvVar{
-		Name:  "KOPIA_ADDITIONAL_ARGS",
+		Name:  envKopiaAdditionalArgs,
 		Value: argsString,
 	})
 
@@ -1540,14 +1545,6 @@ func (m *Mover) recordOperationFailure(operation, failureReason string) {
 	if operation == operationBackup {
 		m.metrics.SnapshotCreationFailure.With(labels).Inc()
 	}
-}
-
-// recordMaintenanceOperation records metrics for maintenance operations
-func (m *Mover) recordMaintenanceOperation() {
-	labels := m.getMetricLabels("maintenance")
-	labels["maintenance_type"] = "scheduled"
-
-	m.metrics.MaintenanceOperations.With(labels).Inc()
 }
 
 // recordJobRetry records metrics for job retries
