@@ -374,10 +374,6 @@ func (m *MaintenanceManager) buildMaintenanceEnvVars(repoConfig *RepositoryConfi
 			Name:  envKopiaOverrideMaintenanceUsername,
 			Value: defaultMaintenanceUsername,
 		},
-		{
-			Name:  envKopiaOverrideMaintenanceHostname,
-			Value: repoConfig.Namespace,
-		},
 	}
 
 	// Note: All repository connection details (including KOPIA_PASSWORD) are sourced

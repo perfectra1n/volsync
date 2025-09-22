@@ -1467,9 +1467,8 @@ function do_backup {
 function ensure_maintenance_ownership {
     log_info "=== Checking maintenance ownership ==="
 
-    local current_username="${KOPIA_OVERRIDE_USERNAME:-maintenance@volsync}"
-    local current_hostname="${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}"
-    local expected_owner="${current_username}@${current_hostname}"
+    # Use dedicated maintenance identity (complete user@host format)
+    local expected_owner="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance@volsync}"
 
     # Check current maintenance owner
     log_info "Checking current maintenance owner..."
@@ -1907,8 +1906,7 @@ elif [[ "${DIRECTION}" == "destination" ]]; then
 elif [[ "${DIRECTION}" == "maintenance" ]]; then
     log_info "=== Running MAINTENANCE ONLY ===="
     log_info "Maintenance mode: Dedicated maintenance operation"
-    log_info "Maintenance Username: ${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance@volsync}"
-    log_info "Maintenance Hostname: ${KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME:-maintenance}"
+    log_info "Maintenance Identity: ${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance@volsync}"
 
     # For maintenance mode, skip data directory checks
     log_info "Skipping data directory validation (not needed for maintenance)"
