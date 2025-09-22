@@ -77,6 +77,7 @@ var _ sm.ReplicationMachine = &rsMachine{}
 //nolint:funlen
 //+kubebuilder:rbac:groups=volsync.backube,resources=replicationsources,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=volsync.backube,resources=replicationsources/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete;deletecollection
 //+kubebuilder:rbac:groups=core,resources=events,verbs=create;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete;deletecollection

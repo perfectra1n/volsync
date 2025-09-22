@@ -159,6 +159,14 @@ func (m *Mover) Synchronize(ctx context.Context) (mover.Result, error) {
 		return mover.Complete(), nil
 	}
 
+	// Reconcile maintenance CronJobs for sources (non-blocking)
+	if m.isSource {
+		if err := m.ReconcileMaintenance(ctx); err != nil {
+			// Log error but don't fail the sync operation
+			m.logger.Error(err, "Failed to reconcile maintenance CronJobs")
+		}
+	}
+
 	// Record operation start time for metrics
 	operationStart := time.Now()
 	operation := operationBackup
@@ -203,9 +211,11 @@ func (m *Mover) Synchronize(ctx context.Context) (mover.Result, error) {
 		duration := time.Since(operationStart)
 		m.recordOperationSuccess(operation, duration)
 
-		// Record maintenance if applicable
-		if m.isSource && m.shouldRunMaintenance() {
-			m.recordMaintenanceOperation()
+		// Update maintenance status for sources
+		if m.isSource {
+			if _, statusErr := m.GetMaintenanceStatus(ctx); statusErr != nil {
+				m.logger.Error(statusErr, "Failed to update maintenance status")
+			}
 		}
 	}
 
@@ -1722,4 +1732,78 @@ func (m *Mover) updateDestinationDiscoveryStatus() {
 		"requestedIdentity", requestedIdentity,
 		"availableIdentities", len(availableIdentities),
 		"errorMsg", errorMsg)
+}
+
+// ReconcileMaintenance ensures a maintenance CronJob exists for this source's repository
+func (m *Mover) ReconcileMaintenance(ctx context.Context) error {
+	// Only handle maintenance for sources
+	if !m.isSource {
+		return nil
+	}
+
+	// Get the ReplicationSource
+	source, ok := m.owner.(*volsyncv1alpha1.ReplicationSource)
+	if !ok {
+		return fmt.Errorf("owner is not a ReplicationSource")
+	}
+
+	// Create maintenance manager
+	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage)
+
+	// Reconcile maintenance CronJob for this source
+	if err := maintenanceManager.ReconcileMaintenanceForSource(ctx, source); err != nil {
+		return fmt.Errorf("failed to reconcile maintenance CronJob: %w", err)
+	}
+
+	// Cleanup orphaned maintenance CronJobs in the namespace
+	if err := maintenanceManager.CleanupOrphanedMaintenanceCronJobs(ctx, source.Namespace); err != nil {
+		// Log but don't fail the reconciliation
+		m.logger.Error(err, "Failed to cleanup orphaned maintenance CronJobs")
+	}
+
+	return nil
+}
+
+// GetMaintenanceStatus returns the status of maintenance operations
+func (m *Mover) GetMaintenanceStatus(ctx context.Context) (*volsyncv1alpha1.ReplicationSourceKopiaStatus, error) {
+	if !m.isSource {
+		return nil, nil
+	}
+
+	// Get the ReplicationSource
+	source, ok := m.owner.(*volsyncv1alpha1.ReplicationSource)
+	if !ok {
+		return nil, fmt.Errorf("owner is not a ReplicationSource")
+	}
+
+	// Create maintenance manager
+	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage)
+
+	// Get maintenance CronJobs for this namespace
+	cronJobs, err := maintenanceManager.GetMaintenanceCronJobsForNamespace(ctx, source.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the CronJob for this repository
+	repoConfig := &RepositoryConfig{
+		Repository: source.Spec.Kopia.Repository,
+		CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
+		Namespace:  source.Namespace,
+		Schedule:   defaultMaintenanceSchedule,
+	}
+	repoHash := repoConfig.Hash()
+
+	for _, cronJob := range cronJobs {
+		if cronJob.Labels[maintenanceRepositoryLabel] == repoHash {
+			// Found the maintenance CronJob for this repository
+			// Check if it has run recently by looking at the last schedule time
+			if cronJob.Status.LastScheduleTime != nil {
+				m.sourceStatus.LastMaintenance = cronJob.Status.LastScheduleTime
+			}
+			break
+		}
+	}
+
+	return m.sourceStatus, nil
 }

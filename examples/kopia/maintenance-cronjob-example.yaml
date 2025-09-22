@@ -1,0 +1,108 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: volsync-kopia-maintenance-test
+---
+# Repository configuration secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kopia-repository-secret
+  namespace: volsync-kopia-maintenance-test
+type: Opaque
+stringData:
+  KOPIA_PASSWORD: "mySecretPassword123"
+  AWS_ACCESS_KEY_ID: "test-access-key"
+  AWS_SECRET_ACCESS_KEY: "test-secret-key"
+---
+# Example PVC to backup
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: source-data
+  namespace: volsync-kopia-maintenance-test
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# ReplicationSource with new MaintenanceCronJob configuration
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: kopia-source-with-maintenance
+  namespace: volsync-kopia-maintenance-test
+spec:
+  sourcePVC: source-data
+  trigger:
+    schedule: "*/30 * * * *"  # Every 30 minutes
+  kopia:
+    repository: kopia-repository-secret
+    # New MaintenanceCronJob configuration
+    maintenanceCronJob:
+      enabled: true                              # Enable maintenance (default: true)
+      schedule: "0 3 * * *"                      # Run at 3 AM daily
+      successfulJobsHistoryLimit: 5              # Keep last 5 successful jobs
+      failedJobsHistoryLimit: 3                  # Keep last 3 failed jobs
+      suspend: false                              # Don't suspend maintenance
+    # Retention policy
+    retain:
+      hourly: 24
+      daily: 7
+      weekly: 4
+      monthly: 12
+      yearly: 2
+---
+# Example showing backward compatibility with maintenanceIntervalDays
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: kopia-source-legacy
+  namespace: volsync-kopia-maintenance-test
+spec:
+  sourcePVC: source-data
+  trigger:
+    schedule: "0 */6 * * *"  # Every 6 hours
+  kopia:
+    repository: kopia-repository-secret
+    # Legacy configuration still works
+    maintenanceIntervalDays: 7  # Weekly maintenance (deprecated)
+    retain:
+      daily: 30
+      weekly: 8
+---
+# Example with maintenance disabled
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: kopia-source-no-maintenance
+  namespace: volsync-kopia-maintenance-test
+spec:
+  sourcePVC: source-data
+  trigger:
+    manual: "trigger-1"
+  kopia:
+    repository: kopia-repository-secret
+    # Disable maintenance
+    maintenanceCronJob:
+      enabled: false  # No maintenance CronJob will be created
+---
+# Example with suspended maintenance
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: kopia-source-suspended-maintenance
+  namespace: volsync-kopia-maintenance-test
+spec:
+  sourcePVC: source-data
+  trigger:
+    schedule: "0 0 * * *"  # Daily at midnight
+  kopia:
+    repository: kopia-repository-secret
+    # Temporarily suspend maintenance
+    maintenanceCronJob:
+      enabled: true
+      schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+      suspend: true           # Temporarily paused
