@@ -82,7 +82,7 @@ var _ = Describe("Kopia Username/Hostname Override", func() {
 			// Configure a simple job spec
 			podSpec := &job.Spec.Template.Spec
 			podSpec.Containers[0].Env = []corev1.EnvVar{}
-			
+
 			// Add identity environment variables
 			podSpec.Containers[0].Env = mover.addIdentityEnvironmentVariables(podSpec.Containers[0].Env)
 
@@ -100,7 +100,7 @@ var _ = Describe("Kopia Username/Hostname Override", func() {
 			// This test verifies that the fix handles cached configurations properly
 			// The entry.sh script should apply overrides to snapshot create commands
 			// even when the repository is already connected with cached config
-			
+
 			// Simulate environment with cache PVC (persistent cache)
 			cachePVC := &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
@@ -108,10 +108,10 @@ var _ = Describe("Kopia Username/Hostname Override", func() {
 					Namespace: "test-namespace",
 				},
 			}
-			
+
 			// Configure cache volume
 			mover.configureCacheVolume(&job.Spec.Template.Spec, cachePVC)
-			
+
 			// Verify cache mount is configured
 			var cacheVolumeFound bool
 			for _, vol := range job.Spec.Template.Spec.Volumes {
@@ -122,16 +122,17 @@ var _ = Describe("Kopia Username/Hostname Override", func() {
 				}
 			}
 			Expect(cacheVolumeFound).To(BeTrue(), "Cache volume should be configured")
-			
+
 			// Add identity environment variables
-			job.Spec.Template.Spec.Containers[0].Env = mover.addIdentityEnvironmentVariables(job.Spec.Template.Spec.Containers[0].Env)
-			
+			job.Spec.Template.Spec.Containers[0].Env = mover.addIdentityEnvironmentVariables(
+				job.Spec.Template.Spec.Containers[0].Env)
+
 			// The environment variables should still be set even with cache
 			envMap := make(map[string]string)
 			for _, env := range job.Spec.Template.Spec.Containers[0].Env {
 				envMap[env.Name] = env.Value
 			}
-			
+
 			Expect(envMap["KOPIA_OVERRIDE_USERNAME"]).To(Equal("testuser"))
 			Expect(envMap["KOPIA_OVERRIDE_HOSTNAME"]).To(Equal("testhost"))
 		})
@@ -184,15 +185,15 @@ func TestUsernameOverrideIntegration(t *testing.T) {
 	// 2. Run the entry.sh script with overrides
 	// 3. Verify snapshots are created with correct identity
 	// 4. Test with cached configuration (the main issue scenario)
-	
-	t.Run("VerifyEntryScriptHasOverrideSupport", func(t *testing.T) {
+
+	t.Run("VerifyEntryScriptHasOverrideSupport", func(_ *testing.T) {
 		// Read the entry.sh script and verify it has the fix
 		// This ensures the snapshot create command includes overrides
 		entryScript := "../../../mover-kopia/entry.sh"
 		// In a real test, we would read the file and check for the fix
 		// For now, we just verify the test compiles
 		_ = entryScript
-		
+
 		// The fix should ensure that do_backup function calls add_user_overrides
 		// for the SNAPSHOT_CMD array
 	})

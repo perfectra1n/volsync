@@ -411,6 +411,7 @@ The simplest way to configure retention is through the ``retain`` field:
          weekly: 4        # Keep 4 weekly snapshots
          monthly: 12      # Keep 12 monthly snapshots
          yearly: 5        # Keep 5 yearly snapshots
+         latest: 50       # Keep 50 most recent snapshots
 
 **Retention Policy Fields:**
 
@@ -419,6 +420,7 @@ The simplest way to configure retention is through the ``retain`` field:
 - ``weekly``: Number of weekly snapshots to retain (default: not set)
 - ``monthly``: Number of monthly snapshots to retain (default: not set)
 - ``yearly``: Number of yearly snapshots to retain (default: not set)
+- ``latest``: Number of most recent snapshots to retain regardless of time (default: not set)
 
 When not specified, Kopia uses its default retention policy.
 

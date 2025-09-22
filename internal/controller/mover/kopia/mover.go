@@ -67,6 +67,11 @@ const (
 	defaultRepoConfigFile   = "repository.config"
 	operationBackup         = "backup"
 	operationRestore        = "restore"
+	// Environment variable names for Kopia configuration
+	envKopiaOverrideUsername = "KOPIA_OVERRIDE_USERNAME"
+	envKopiaOverrideHostname = "KOPIA_OVERRIDE_HOSTNAME"
+	envSftpPassword          = "SFTP_PASSWORD"
+	envKopiaAdditionalArgs   = "KOPIA_ADDITIONAL_ARGS"
 )
 
 // PolicyConfigSecret wraps a Secret for policy configuration mounting
@@ -96,7 +101,6 @@ func (p *PolicyConfigConfigMap) GetVolumeSource(_ string) corev1.VolumeSource {
 		},
 	}
 }
-
 
 // Mover is the reconciliation logic for the Kopia-based data mover.
 type Mover struct {
@@ -160,6 +164,14 @@ func (m *Mover) Synchronize(ctx context.Context) (mover.Result, error) {
 		return mover.Complete(), nil
 	}
 
+	// Reconcile maintenance CronJobs for sources (non-blocking)
+	if m.isSource {
+		if err := m.ReconcileMaintenance(ctx); err != nil {
+			// Log error but don't fail the sync operation
+			m.logger.Error(err, "Failed to reconcile maintenance CronJobs")
+		}
+	}
+
 	// Record operation start time for metrics
 	operationStart := time.Now()
 	operation := operationBackup
@@ -204,9 +216,11 @@ func (m *Mover) Synchronize(ctx context.Context) (mover.Result, error) {
 		duration := time.Since(operationStart)
 		m.recordOperationSuccess(operation, duration)
 
-		// Record maintenance if applicable
-		if m.isSource && m.shouldRunMaintenance() {
-			m.recordMaintenanceOperation()
+		// Update maintenance status for sources
+		if m.isSource {
+			if _, statusErr := m.GetMaintenanceStatus(ctx); statusErr != nil {
+				m.logger.Error(statusErr, "Failed to update maintenance status")
+			}
 		}
 	}
 
@@ -742,7 +756,7 @@ func (m *Mover) buildSFTPEnvironmentVariables(repo *corev1.Secret) []corev1.EnvV
 		utils.EnvFromSecret(repo.Name, "SFTP_HOST", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_PORT", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_USERNAME", true),
-		utils.EnvFromSecret(repo.Name, "SFTP_PASSWORD", true),
+		utils.EnvFromSecret(repo.Name, envSftpPassword, true),
 		utils.EnvFromSecret(repo.Name, "SFTP_PATH", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_KEY_FILE", true),
 		utils.EnvFromSecret(repo.Name, "SFTP_KNOWN_HOSTS", true),
@@ -768,11 +782,11 @@ func (m *Mover) addIdentityEnvironmentVariables(envVars []corev1.EnvVar) []corev
 
 	envVars = append(envVars,
 		corev1.EnvVar{
-			Name:  "KOPIA_OVERRIDE_USERNAME",
+			Name:  envKopiaOverrideUsername,
 			Value: m.username,
 		},
 		corev1.EnvVar{
-			Name:  "KOPIA_OVERRIDE_HOSTNAME",
+			Name:  envKopiaOverrideHostname,
 			Value: m.hostname,
 		},
 	)
@@ -843,10 +857,10 @@ func (m *Mover) addDestinationEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 	if m.enableFileDeletionOnRestore {
 		envVars = append(envVars, corev1.EnvVar{Name: "KOPIA_ENABLE_FILE_DELETION", Value: "true"})
 	}
-	
+
 	// Add additional args if specified
 	envVars = m.addAdditionalArgsEnvVar(envVars)
-	
+
 	return envVars
 }
 
@@ -876,6 +890,10 @@ func (m *Mover) addRetentionPolicyEnvVars(envVars []corev1.EnvVar) []corev1.EnvV
 		envVars = append(envVars, corev1.EnvVar{
 			Name: "KOPIA_RETAIN_YEARLY", Value: strconv.Itoa(int(*m.retainPolicy.Yearly))})
 	}
+	if m.retainPolicy.Latest != nil {
+		envVars = append(envVars, corev1.EnvVar{
+			Name: "KOPIA_RETAIN_LATEST", Value: strconv.Itoa(int(*m.retainPolicy.Latest))})
+	}
 	return envVars
 }
 
@@ -894,28 +912,21 @@ func (m *Mover) addActionsEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 	return envVars
 }
 
-// validateAdditionalArgs validates that additional arguments are valid
-func (m *Mover) validateAdditionalArgs() error {
-	// No validation - allow users to use any Kopia flags they need
-	// Users are responsible for providing valid flags
-	return nil
-}
-
 // addAdditionalArgsEnvVar adds additional arguments as an environment variable
 func (m *Mover) addAdditionalArgsEnvVar(envVars []corev1.EnvVar) []corev1.EnvVar {
 	if len(m.additionalArgs) == 0 {
 		return envVars
 	}
-	
+
 	// Join all additional args with a special delimiter that's unlikely to appear in args
 	// We'll use "|VOLSYNC_ARG_SEP|" as the delimiter
 	argsString := strings.Join(m.additionalArgs, "|VOLSYNC_ARG_SEP|")
-	
+
 	envVars = append(envVars, corev1.EnvVar{
-		Name:  "KOPIA_ADDITIONAL_ARGS",
+		Name:  envKopiaAdditionalArgs,
 		Value: argsString,
 	})
-	
+
 	return envVars
 }
 
@@ -1536,14 +1547,6 @@ func (m *Mover) recordOperationFailure(operation, failureReason string) {
 	}
 }
 
-// recordMaintenanceOperation records metrics for maintenance operations
-func (m *Mover) recordMaintenanceOperation() {
-	labels := m.getMetricLabels("maintenance")
-	labels["maintenance_type"] = "scheduled"
-
-	m.metrics.MaintenanceOperations.With(labels).Inc()
-}
-
 // recordJobRetry records metrics for job retries
 func (m *Mover) recordJobRetry(operation, retryReason string) {
 	labels := m.getMetricLabels(operation)
@@ -1644,6 +1647,10 @@ func (m *Mover) recordPolicyCompliance() {
 			retentionLabels["retention_type"] = "yearly"
 			m.metrics.RetentionCompliance.With(retentionLabels).Set(1)
 		}
+		if m.retainPolicy.Latest != nil {
+			retentionLabels["retention_type"] = "latest"
+			m.metrics.RetentionCompliance.With(retentionLabels).Set(1)
+		}
 	}
 
 	// Check policy configuration compliance
@@ -1722,4 +1729,78 @@ func (m *Mover) updateDestinationDiscoveryStatus() {
 		"requestedIdentity", requestedIdentity,
 		"availableIdentities", len(availableIdentities),
 		"errorMsg", errorMsg)
+}
+
+// ReconcileMaintenance ensures a maintenance CronJob exists for this source's repository
+func (m *Mover) ReconcileMaintenance(ctx context.Context) error {
+	// Only handle maintenance for sources
+	if !m.isSource {
+		return nil
+	}
+
+	// Get the ReplicationSource
+	source, ok := m.owner.(*volsyncv1alpha1.ReplicationSource)
+	if !ok {
+		return fmt.Errorf("owner is not a ReplicationSource")
+	}
+
+	// Create maintenance manager
+	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage)
+
+	// Reconcile maintenance CronJob for this source
+	if err := maintenanceManager.ReconcileMaintenanceForSource(ctx, source); err != nil {
+		return fmt.Errorf("failed to reconcile maintenance CronJob: %w", err)
+	}
+
+	// Cleanup orphaned maintenance CronJobs in the namespace
+	if err := maintenanceManager.CleanupOrphanedMaintenanceCronJobs(ctx, source.Namespace); err != nil {
+		// Log but don't fail the reconciliation
+		m.logger.Error(err, "Failed to cleanup orphaned maintenance CronJobs")
+	}
+
+	return nil
+}
+
+// GetMaintenanceStatus returns the status of maintenance operations
+func (m *Mover) GetMaintenanceStatus(ctx context.Context) (*volsyncv1alpha1.ReplicationSourceKopiaStatus, error) {
+	if !m.isSource {
+		return nil, nil
+	}
+
+	// Get the ReplicationSource
+	source, ok := m.owner.(*volsyncv1alpha1.ReplicationSource)
+	if !ok {
+		return nil, fmt.Errorf("owner is not a ReplicationSource")
+	}
+
+	// Create maintenance manager
+	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage)
+
+	// Get maintenance CronJobs for this namespace
+	cronJobs, err := maintenanceManager.GetMaintenanceCronJobsForNamespace(ctx, source.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the CronJob for this repository
+	repoConfig := &RepositoryConfig{
+		Repository: source.Spec.Kopia.Repository,
+		CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
+		Namespace:  source.Namespace,
+		Schedule:   defaultMaintenanceSchedule,
+	}
+	repoHash := repoConfig.Hash()
+
+	for _, cronJob := range cronJobs {
+		if cronJob.Labels[maintenanceRepositoryLabel] == repoHash {
+			// Found the maintenance CronJob for this repository
+			// Check if it has run recently by looking at the last schedule time
+			if cronJob.Status.LastScheduleTime != nil {
+				m.sourceStatus.LastMaintenance = cronJob.Status.LastScheduleTime
+			}
+			break
+		}
+	}
+
+	return m.sourceStatus, nil
 }

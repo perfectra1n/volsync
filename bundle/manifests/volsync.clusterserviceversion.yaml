@@ -55,7 +55,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2025-08-14T23:12:42Z"
+    createdAt: "2025-09-22T17:42:24Z"
     olm.skipRange: '>=0.4.0 <0.14.0'
     operators.operatorframework.io/builder: operator-sdk-v1.33.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
@@ -199,6 +199,18 @@ spec:
           - create
           - delete
           - deletecollection
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - batch
+          resources:
+          - cronjobs
+          verbs:
+          - create
+          - delete
           - get
           - list
           - patch

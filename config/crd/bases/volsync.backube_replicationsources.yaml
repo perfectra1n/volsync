@@ -147,7 +147,8 @@ spec:
                       Users can use 'kopia benchmark compression' to test which algorithm works best for their data.
 
                       Supported algorithms (as of Kopia documentation):
-                      - s2 variants: s2-default, s2-better, s2-parallel-4, s2-parallel-8 (s2-parallel-n supports various concurrency levels)
+                      - s2 variants: s2-default, s2-better, s2-parallel-4, s2-parallel-8
+                        (s2-parallel-n supports various concurrency levels)
                       - zstd variants: zstd (standard), zstd-fastest, zstd-better-compression, zstd-best-compression
                       - gzip variants: gzip, gzip-best-speed, gzip-best-compression
                       - pgzip variants (parallel gzip): pgzip, pgzip-best-speed, pgzip-best-compression
@@ -189,8 +190,114 @@ spec:
                       If not specified, defaults to the namespace name.
                     pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                     type: string
+                  maintenanceCronJob:
+                    description: |-
+                      MaintenanceCronJob defines the configuration for scheduled maintenance operations
+                      using Kubernetes CronJobs. This provides more flexibility than MaintenanceIntervalDays
+                      by allowing cron-based scheduling and additional job configuration options.
+                    properties:
+                      enabled:
+                        default: true
+                        description: |-
+                          Enabled determines if maintenance CronJobs should be created.
+                          When false, no maintenance CronJob will be created.
+                        type: boolean
+                      failedJobsHistoryLimit:
+                        default: 1
+                        description: |-
+                          FailedJobsHistoryLimit specifies how many failed maintenance Jobs
+                          should be kept. Defaults to 1.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      resources:
+                        description: |-
+                          Resources represents compute resources required by the maintenance container.
+                          If not specified, defaults to 256Mi memory request and 1Gi memory limit.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-compute-resources-container/
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This is an alpha field and requires enabling the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      schedule:
+                        default: 0 2 * * *
+                        description: |-
+                          Schedule is a cron schedule for when maintenance should run.
+                          The schedule is interpreted in the controller's timezone.
+                        pattern: ^(@(annually|yearly|monthly|weekly|daily|hourly))|((((\d+,)*\d+|(\d+(\/|-)\d+)|\*(\/\d+)?)\s?){5})$
+                        type: string
+                      successfulJobsHistoryLimit:
+                        default: 3
+                        description: |-
+                          SuccessfulJobsHistoryLimit specifies how many successful maintenance Jobs
+                          should be kept. Defaults to 3.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      suspend:
+                        description: |-
+                          Suspend can be used to temporarily stop maintenance. When true, the
+                          CronJob will not create new Jobs, but existing Jobs will be allowed
+                          to complete.
+                        type: boolean
+                    type: object
                   maintenanceIntervalDays:
-                    description: MaintenanceIntervalDays define how often to run maintenance
+                    description: |-
+                      MaintenanceIntervalDays define how often to run maintenance (deprecated - use MaintenanceCronJob instead)
+                      A value of 0 disables maintenance. Defaults to 7 if not specified.
                     format: int32
                     type: integer
                   moverAffinity:
@@ -1493,6 +1600,11 @@ spec:
                       hourly:
                         description: Hourly defines the number of snapshots to be
                           kept hourly
+                        format: int32
+                        type: integer
+                      latest:
+                        description: Latest defines the number of latest snapshots
+                          to keep
                         format: int32
                         type: integer
                       monthly:
@@ -7061,6 +7173,19 @@ spec:
                   lastMaintenance:
                     description: lastMaintenance in the object holding the time of
                       last maintenance
+                    format: date-time
+                    type: string
+                  maintenanceCronJob:
+                    description: maintenanceCronJob is the name of the maintenance
+                      CronJob
+                    type: string
+                  maintenanceFailures:
+                    description: maintenanceFailures counts the number of consecutive
+                      maintenance failures
+                    type: integer
+                  nextScheduledMaintenance:
+                    description: nextScheduledMaintenance is the next scheduled maintenance
+                      time
                     format: date-time
                     type: string
                 type: object

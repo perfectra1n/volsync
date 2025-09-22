@@ -1,0 +1,960 @@
+---
+- hosts: localhost
+  tags:
+    - e2e
+    - kopia
+    - maintenance
+    - unprivileged
+  vars:
+    kopia_secret_name: kopia-secret
+  tasks:
+    - include_role:
+        name: create_namespace
+
+    - include_role:
+        name: gather_cluster_info
+
+    # We're running everything as a normal user
+    - name: Define podSecurityContext
+      ansible.builtin.set_fact:
+        podSecurityContext:
+          fsGroup: 5678
+          runAsGroup: 5678
+          runAsNonRoot: true
+          runAsUser: 1234
+          seccompProfile:
+            type: RuntimeDefault
+      when: not cluster_info.is_openshift
+
+    - include_role:
+        name: create_kopia_secret
+      vars:
+        minio_namespace: minio
+
+    - name: Create source PVC for basic test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data-source-basic
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Write data into the basic source PVC
+      include_role:
+        name: write_to_pvc
+      vars:
+        data: 'basic-test-data'
+        path: '/datafile'
+        pvc_name: 'data-source-basic'
+
+    # Test 1: Basic maintenance CronJob creation with default settings
+    - name: Create ReplicationSource with default MaintenanceCronJob (w/ mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-basic
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-basic
+            trigger:
+              manual: once-basic
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+              moverSecurityContext: "{{ podSecurityContext }}"
+      when: podSecurityContext is defined
+
+    - name: Create ReplicationSource with default MaintenanceCronJob (w/o mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-basic
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-basic
+            trigger:
+              manual: once-basic
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+      when: podSecurityContext is not defined
+
+    - name: Wait for basic sync to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-basic
+        namespace: "{{ namespace }}"
+      register: res
+      until: >
+        res.resources | length > 0 and
+        res.resources[0].status.lastManualSync is defined and
+        res.resources[0].status.lastManualSync=="once-basic" and
+        res.resources[0].status.latestMoverStatus is defined and
+        res.resources[0].status.latestMoverStatus.result == "Successful"
+      delay: 1
+      retries: 900
+
+    - name: Verify maintenance CronJob was created with default settings
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: default_cronjob
+
+    - name: Check default CronJob properties
+      ansible.builtin.assert:
+        that:
+          - default_cronjob.resources | length == 1
+          - default_cronjob.resources[0].spec.schedule == "0 2 * * *"
+          - default_cronjob.resources[0].spec.successfulJobsHistoryLimit == 3
+          - default_cronjob.resources[0].spec.failedJobsHistoryLimit == 1
+          - default_cronjob.resources[0].spec.suspend == false
+        fail_msg: "Default CronJob does not have expected properties"
+
+    - name: Verify maintenance CronJob name is set in ReplicationSource status
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-basic
+        namespace: "{{ namespace }}"
+      register: basic_source_status
+
+    - name: Check ReplicationSource status has maintenanceCronJob field
+      ansible.builtin.assert:
+        that:
+          - basic_source_status.resources[0].status.kopia.maintenanceCronJob is defined
+          - basic_source_status.resources[0].status.kopia.maintenanceCronJob != ""
+        fail_msg: "ReplicationSource status should contain maintenanceCronJob name"
+
+    # Test 2: Custom schedule and resource configuration
+    - name: Create source PVC for custom test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data-source-custom
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Write data into the custom source PVC
+      include_role:
+        name: write_to_pvc
+      vars:
+        data: 'custom-test-data'
+        path: '/datafile'
+        pvc_name: 'data-source-custom'
+
+    - name: Create ReplicationSource with custom MaintenanceCronJob (w/ mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-custom
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-custom
+            trigger:
+              manual: once-custom
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+                schedule: "0 3 * * 0"
+                successfulJobsHistoryLimit: 5
+                failedJobsHistoryLimit: 2
+                suspend: false
+                resources:
+                  requests:
+                    memory: "512Mi"
+                    cpu: "100m"
+                  limits:
+                    memory: "2Gi"
+                    cpu: "500m"
+              moverSecurityContext: "{{ podSecurityContext }}"
+      when: podSecurityContext is defined
+
+    - name: Create ReplicationSource with custom MaintenanceCronJob (w/o mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-custom
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-custom
+            trigger:
+              manual: once-custom
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+                schedule: "0 3 * * 0"
+                successfulJobsHistoryLimit: 5
+                failedJobsHistoryLimit: 2
+                suspend: false
+                resources:
+                  requests:
+                    memory: "512Mi"
+                    cpu: "100m"
+                  limits:
+                    memory: "2Gi"
+                    cpu: "500m"
+      when: podSecurityContext is not defined
+
+    - name: Wait for custom sync to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-custom
+        namespace: "{{ namespace }}"
+      register: res
+      until: >
+        res.resources | length > 0 and
+        res.resources[0].status.lastManualSync is defined and
+        res.resources[0].status.lastManualSync=="once-custom" and
+        res.resources[0].status.latestMoverStatus is defined and
+        res.resources[0].status.latestMoverStatus.result == "Successful"
+      delay: 1
+      retries: 900
+
+    - name: Verify custom maintenance CronJob configuration
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: all_cronjobs
+
+    - name: Find custom CronJob by schedule
+      ansible.builtin.set_fact:
+        custom_cronjob: "{{ all_cronjobs.resources | selectattr('spec.schedule', 'equalto', '0 3 * * 0') | first }}"
+
+    - name: Check custom CronJob properties
+      ansible.builtin.assert:
+        that:
+          - custom_cronjob.spec.schedule == "0 3 * * 0"
+          - custom_cronjob.spec.successfulJobsHistoryLimit == 5
+          - custom_cronjob.spec.failedJobsHistoryLimit == 2
+          - custom_cronjob.spec.suspend == false
+          - custom_cronjob.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory == "512Mi"
+          - custom_cronjob.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu == "100m"
+          - custom_cronjob.spec.jobTemplate.spec.template.spec.containers[0].resources.limits.memory == "2Gi"
+          - custom_cronjob.spec.jobTemplate.spec.template.spec.containers[0].resources.limits.cpu == "500m"
+        fail_msg: "Custom CronJob does not have expected properties"
+
+    # Test 3: Repository deduplication with multiple sources
+    - name: Create additional source PVCs for deduplication test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: "data-source-dedup-{{ item }}"
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+      loop:
+        - 1
+        - 2
+        - 3
+
+    - name: Write data into deduplication test PVCs
+      include_role:
+        name: write_to_pvc
+      vars:
+        data: "dedup-test-data-{{ item }}"
+        path: '/datafile'
+        pvc_name: "data-source-dedup-{{ item }}"
+      loop:
+        - 1
+        - 2
+        - 3
+
+    - name: Create multiple ReplicationSources with same repository (w/ mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: "source-dedup-{{ item }}"
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: "data-source-dedup-{{ item }}"
+            trigger:
+              manual: "once-dedup-{{ item }}"
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+                schedule: "0 4 * * *"
+              moverSecurityContext: "{{ podSecurityContext }}"
+      loop:
+        - 1
+        - 2
+        - 3
+      when: podSecurityContext is defined
+
+    - name: Create multiple ReplicationSources with same repository (w/o mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: "source-dedup-{{ item }}"
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: "data-source-dedup-{{ item }}"
+            trigger:
+              manual: "once-dedup-{{ item }}"
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+                schedule: "0 4 * * *"
+      loop:
+        - 1
+        - 2
+        - 3
+      when: podSecurityContext is not defined
+
+    - name: Wait for all dedup syncs to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: "source-dedup-{{ item }}"
+        namespace: "{{ namespace }}"
+      register: res
+      until: >
+        res.resources | length > 0 and
+        res.resources[0].status.lastManualSync is defined and
+        res.resources[0].status.lastManualSync=="once-dedup-{{ item }}" and
+        res.resources[0].status.latestMoverStatus is defined and
+        res.resources[0].status.latestMoverStatus.result == "Successful"
+      delay: 1
+      retries: 900
+      loop:
+        - 1
+        - 2
+        - 3
+
+    - name: Verify only one CronJob exists for the repository (deduplication)
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: dedup_cronjobs
+
+    - name: Find CronJob with 4 AM schedule (deduplication test)
+      ansible.builtin.set_fact:
+        dedup_cronjob_list: "{{ dedup_cronjobs.resources | selectattr('spec.schedule', 'equalto', '0 4 * * *') | list }}"
+
+    - name: Check repository deduplication works
+      ansible.builtin.assert:
+        that:
+          - dedup_cronjob_list | length == 1
+        fail_msg: "Should have exactly one CronJob for multiple sources with same repository"
+
+    - name: Verify all ReplicationSources reference the same CronJob
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: "source-dedup-{{ item }}"
+        namespace: "{{ namespace }}"
+      register: dedup_sources
+      loop:
+        - 1
+        - 2
+        - 3
+
+    - name: Check all sources have same maintenanceCronJob name
+      ansible.builtin.assert:
+        that:
+          - dedup_sources.results[0].resources[0].status.kopia.maintenanceCronJob == dedup_sources.results[1].resources[0].status.kopia.maintenanceCronJob
+          - dedup_sources.results[1].resources[0].status.kopia.maintenanceCronJob == dedup_sources.results[2].resources[0].status.kopia.maintenanceCronJob
+        fail_msg: "All sources with same repository should reference the same maintenance CronJob"
+
+    # Test 4: Test maintenance script functionality by triggering a manual job
+    - name: Get the maintenance CronJob name for manual testing
+      ansible.builtin.set_fact:
+        maintenance_cronjob_name: "{{ dedup_cronjob_list[0].metadata.name }}"
+
+    - name: Create manual maintenance Job to test script functionality
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: manual-maintenance-test
+            namespace: "{{ namespace }}"
+            labels:
+              volsync.backube/kopia-maintenance: "true"
+          spec:
+            template:
+              metadata:
+                labels:
+                  volsync.backube/kopia-maintenance: "true"
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kopia
+                  image: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].image }}"
+                  command: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].command }}"
+                  args: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].args }}"
+                  env: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].env }}"
+                  volumeMounts: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].volumeMounts }}"
+                  resources: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].resources }}"
+                  securityContext: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.containers[0].securityContext | default({}) }}"
+                volumes: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.volumes }}"
+                securityContext: "{{ dedup_cronjob_list[0].spec.jobTemplate.spec.template.spec.securityContext | default({}) }}"
+
+    - name: Wait for manual maintenance Job to complete
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: Job
+        name: manual-maintenance-test
+        namespace: "{{ namespace }}"
+      register: maintenance_job
+      until: >
+        maintenance_job.resources | length > 0 and
+        maintenance_job.resources[0].status.conditions is defined and
+        (maintenance_job.resources[0].status.conditions | selectattr('type', 'equalto', 'Complete') | list | length > 0 or
+         maintenance_job.resources[0].status.conditions | selectattr('type', 'equalto', 'Failed') | list | length > 0)
+      delay: 5
+      retries: 60
+
+    - name: Check maintenance Job succeeded
+      ansible.builtin.assert:
+        that:
+          - maintenance_job.resources[0].status.conditions | selectattr('type', 'equalto', 'Complete') | list | length > 0
+          - maintenance_job.resources[0].status.succeeded == 1
+        fail_msg: "Manual maintenance Job should have completed successfully"
+
+    - name: Get maintenance Job pod logs to verify DIRECTION=maintenance
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "job-name=manual-maintenance-test"
+      register: maintenance_pod
+
+    - name: Retrieve maintenance pod logs
+      kubernetes.core.k8s_log:
+        api_version: v1
+        kind: Pod
+        name: "{{ maintenance_pod.resources[0].metadata.name }}"
+        namespace: "{{ namespace }}"
+      register: maintenance_logs
+
+    - name: Verify maintenance script functionality in logs
+      ansible.builtin.assert:
+        that:
+          - "'DIRECTION=maintenance' in maintenance_logs.log"
+          - "'Running maintenance operations' in maintenance_logs.log or 'maintenance mode' in maintenance_logs.log"
+        fail_msg: "Maintenance script should run in maintenance mode and log appropriate messages"
+
+    # Test 5: Test backward compatibility with maintenanceIntervalDays
+    - name: Create source PVC for backward compatibility test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data-source-compat
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Write data into the compatibility source PVC
+      include_role:
+        name: write_to_pvc
+      vars:
+        data: 'compat-test-data'
+        path: '/datafile'
+        pvc_name: 'data-source-compat'
+
+    - name: Create ReplicationSource with maintenanceIntervalDays (w/ mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-compat
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-compat
+            trigger:
+              manual: once-compat
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceIntervalDays: 7
+              moverSecurityContext: "{{ podSecurityContext }}"
+      when: podSecurityContext is defined
+
+    - name: Create ReplicationSource with maintenanceIntervalDays (w/o mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-compat
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-compat
+            trigger:
+              manual: once-compat
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceIntervalDays: 7
+      when: podSecurityContext is not defined
+
+    - name: Wait for compatibility sync to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-compat
+        namespace: "{{ namespace }}"
+      register: res
+      until: >
+        res.resources | length > 0 and
+        res.resources[0].status.lastManualSync is defined and
+        res.resources[0].status.lastManualSync=="once-compat" and
+        res.resources[0].status.latestMoverStatus is defined and
+        res.resources[0].status.latestMoverStatus.result == "Successful"
+      delay: 1
+      retries: 900
+
+    - name: Verify backward compatibility - CronJob still created for maintenanceIntervalDays
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: compat_cronjobs
+
+    - name: Check backward compatibility CronJob exists
+      ansible.builtin.assert:
+        that:
+          - compat_cronjobs.resources | length >= 1
+        fail_msg: "CronJob should be created even when using deprecated maintenanceIntervalDays"
+
+    # Test 6: Test cleanup when ReplicationSource is deleted
+    - name: Delete one of the deduplication ReplicationSources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-dedup-1
+        namespace: "{{ namespace }}"
+
+    - name: Wait for ReplicationSource deletion to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-dedup-1
+        namespace: "{{ namespace }}"
+      register: deleted_source
+      until: deleted_source.resources | length == 0
+      delay: 1
+      retries: 60
+
+    - name: Verify CronJob still exists (other sources still using it)
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        name: "{{ maintenance_cronjob_name }}"
+        namespace: "{{ namespace }}"
+      register: cronjob_after_partial_delete
+
+    - name: Check CronJob persists when other sources exist
+      ansible.builtin.assert:
+        that:
+          - cronjob_after_partial_delete.resources | length == 1
+        fail_msg: "CronJob should persist when other sources are still using the same repository"
+
+    - name: Delete remaining deduplication ReplicationSources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: "source-dedup-{{ item }}"
+        namespace: "{{ namespace }}"
+      loop:
+        - 2
+        - 3
+
+    - name: Wait for all ReplicationSource deletions to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: "source-dedup-{{ item }}"
+        namespace: "{{ namespace }}"
+      register: deleted_sources
+      until: deleted_sources.resources | length == 0
+      delay: 1
+      retries: 60
+      loop:
+        - 2
+        - 3
+
+    - name: Verify CronJob is cleaned up when no sources remain
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        name: "{{ maintenance_cronjob_name }}"
+        namespace: "{{ namespace }}"
+      register: cronjob_after_full_delete
+
+    - name: Check CronJob is deleted when no sources remain
+      ansible.builtin.assert:
+        that:
+          - cronjob_after_full_delete.resources | length == 0
+        fail_msg: "CronJob should be deleted when no ReplicationSources are using the repository"
+
+    # Test 7: Test disabled maintenance CronJob
+    - name: Create source PVC for disabled test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data-source-disabled
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Write data into the disabled source PVC
+      include_role:
+        name: write_to_pvc
+      vars:
+        data: 'disabled-test-data'
+        path: '/datafile'
+        pvc_name: 'data-source-disabled'
+
+    - name: Create ReplicationSource with disabled MaintenanceCronJob (w/ mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-disabled
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-disabled
+            trigger:
+              manual: once-disabled
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: false
+              moverSecurityContext: "{{ podSecurityContext }}"
+      when: podSecurityContext is defined
+
+    - name: Create ReplicationSource with disabled MaintenanceCronJob (w/o mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-disabled
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-disabled
+            trigger:
+              manual: once-disabled
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: false
+      when: podSecurityContext is not defined
+
+    - name: Wait for disabled sync to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-disabled
+        namespace: "{{ namespace }}"
+      register: res
+      until: >
+        res.resources | length > 0 and
+        res.resources[0].status.lastManualSync is defined and
+        res.resources[0].status.lastManualSync=="once-disabled" and
+        res.resources[0].status.latestMoverStatus is defined and
+        res.resources[0].status.latestMoverStatus.result == "Successful"
+      delay: 1
+      retries: 900
+
+    - name: Verify no new CronJob created for disabled maintenance
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: disabled_cronjobs
+
+    - name: Check disabled maintenance doesn't create CronJob
+      ansible.builtin.assert:
+        that:
+          - disabled_cronjobs.resources | length <= 2  # Should be the default and custom ones from earlier tests
+        fail_msg: "Disabled maintenance should not create new CronJobs"
+
+    - name: Verify ReplicationSource status doesn't have maintenanceCronJob field when disabled
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-disabled
+        namespace: "{{ namespace }}"
+      register: disabled_source_status
+
+    - name: Check disabled source has empty maintenanceCronJob field
+      ansible.builtin.assert:
+        that:
+          - disabled_source_status.resources[0].status.kopia.maintenanceCronJob is not defined or
+            disabled_source_status.resources[0].status.kopia.maintenanceCronJob == ""
+        fail_msg: "Disabled maintenance should not set maintenanceCronJob in status"
+
+    # Test 8: Test suspended maintenance CronJob
+    - name: Create source PVC for suspended test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data-source-suspended
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Write data into the suspended source PVC
+      include_role:
+        name: write_to_pvc
+      vars:
+        data: 'suspended-test-data'
+        path: '/datafile'
+        pvc_name: 'data-source-suspended'
+
+    - name: Create ReplicationSource with suspended MaintenanceCronJob (w/ mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-suspended
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-suspended
+            trigger:
+              manual: once-suspended
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+                suspend: true
+                schedule: "0 5 * * *"
+              moverSecurityContext: "{{ podSecurityContext }}"
+      when: podSecurityContext is defined
+
+    - name: Create ReplicationSource with suspended MaintenanceCronJob (w/o mSC)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: volsync.backube/v1alpha1
+          kind: ReplicationSource
+          metadata:
+            name: source-suspended
+            namespace: "{{ namespace }}"
+          spec:
+            sourcePVC: data-source-suspended
+            trigger:
+              manual: once-suspended
+            kopia:
+              repository: "{{ kopia_secret_name }}"
+              retain:
+                daily: 2
+                monthly: 1
+              copyMethod: Snapshot
+              cacheCapacity: 1Gi
+              maintenanceCronJob:
+                enabled: true
+                suspend: true
+                schedule: "0 5 * * *"
+      when: podSecurityContext is not defined
+
+    - name: Wait for suspended sync to complete
+      kubernetes.core.k8s_info:
+        api_version: volsync.backube/v1alpha1
+        kind: ReplicationSource
+        name: source-suspended
+        namespace: "{{ namespace }}"
+      register: res
+      until: >
+        res.resources | length > 0 and
+        res.resources[0].status.lastManualSync is defined and
+        res.resources[0].status.lastManualSync=="once-suspended" and
+        res.resources[0].status.latestMoverStatus is defined and
+        res.resources[0].status.latestMoverStatus.result == "Successful"
+      delay: 1
+      retries: 900
+
+    - name: Verify suspended CronJob configuration
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: suspended_cronjobs
+
+    - name: Find suspended CronJob by schedule
+      ansible.builtin.set_fact:
+        suspended_cronjob: "{{ suspended_cronjobs.resources | selectattr('spec.schedule', 'equalto', '0 5 * * *') | first }}"
+
+    - name: Check suspended CronJob is actually suspended
+      ansible.builtin.assert:
+        that:
+          - suspended_cronjob.spec.suspend == true
+        fail_msg: "Suspended CronJob should have suspend=true"
+
+    # Final cleanup verification
+    - name: Get final count of all maintenance CronJobs
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "volsync.backube/kopia-maintenance=true"
+      register: final_cronjobs
+
+    - name: Verify expected number of CronJobs remain
+      ansible.builtin.assert:
+        that:
+          - final_cronjobs.resources | length >= 3  # basic, custom, suspended (compat might be same as one of these)
+          - final_cronjobs.resources | length <= 4  # should not exceed reasonable number
+        fail_msg: "Unexpected number of maintenance CronJobs remain after all tests"
+
+    # Cleanup manual maintenance job
+    - name: Clean up manual maintenance Job
+      kubernetes.core.k8s:
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        name: manual-maintenance-test
+        namespace: "{{ namespace }}"

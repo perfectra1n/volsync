@@ -134,15 +134,15 @@ func TestAdditionalArgsIntegration(t *testing.T) {
 		}
 
 		envVars := m.addAdditionalArgsEnvVar([]corev1.EnvVar{})
-		
+
 		if len(envVars) != 1 {
 			t.Errorf("expected 1 env var, got %d", len(envVars))
 		}
-		
+
 		if envVars[0].Name != "KOPIA_ADDITIONAL_ARGS" {
 			t.Errorf("expected env var name KOPIA_ADDITIONAL_ARGS, got %s", envVars[0].Name)
 		}
-		
+
 		expected := "--one-file-system|VOLSYNC_ARG_SEP|--parallel=8"
 		if envVars[0].Value != expected {
 			t.Errorf("expected env var value '%s', got '%s'", expected, envVars[0].Value)
@@ -160,12 +160,12 @@ func TestAdditionalArgsIntegration(t *testing.T) {
 		}
 
 		envVars := m.addAdditionalArgsEnvVar([]corev1.EnvVar{})
-		
+
 		// Should include all args without validation
 		if len(envVars) != 1 {
 			t.Errorf("expected 1 env var, got %d", len(envVars))
 		}
-		
+
 		expected := "--password=secret|VOLSYNC_ARG_SEP|--config-file=/custom/config|VOLSYNC_ARG_SEP|--repository=s3://bucket"
 		if envVars[0].Value != expected {
 			t.Errorf("expected env var value '%s', got '%s'", expected, envVars[0].Value)

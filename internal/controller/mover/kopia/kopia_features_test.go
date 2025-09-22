@@ -846,6 +846,15 @@ func getRetentionPolicyTestCases() []retentionPolicyTestCase {
 			},
 		},
 		{
+			name: "latest retention only",
+			retainPolicy: &volsyncv1alpha1.KopiaRetainPolicy{
+				Latest: ptr.To[int32](10),
+			},
+			expectedEnvs: map[string]string{
+				"KOPIA_RETAIN_LATEST": "10",
+			},
+		},
+		{
 			name: "complete retention policy",
 			retainPolicy: &volsyncv1alpha1.KopiaRetainPolicy{
 				Hourly:  ptr.To[int32](24),
@@ -853,6 +862,7 @@ func getRetentionPolicyTestCases() []retentionPolicyTestCase {
 				Weekly:  ptr.To[int32](8),
 				Monthly: ptr.To[int32](12),
 				Yearly:  ptr.To[int32](5),
+				Latest:  ptr.To[int32](100),
 			},
 			expectedEnvs: map[string]string{
 				"KOPIA_RETAIN_HOURLY":  "24",
@@ -860,6 +870,7 @@ func getRetentionPolicyTestCases() []retentionPolicyTestCase {
 				"KOPIA_RETAIN_WEEKLY":  "8",
 				"KOPIA_RETAIN_MONTHLY": "12",
 				"KOPIA_RETAIN_YEARLY":  "5",
+				"KOPIA_RETAIN_LATEST":  "100",
 			},
 		},
 	}

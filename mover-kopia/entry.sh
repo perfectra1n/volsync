@@ -238,6 +238,52 @@ function error {
     exit "$1"
 }
 
+# Log repository health metrics (useful for maintenance monitoring)
+function log_repository_health {
+    local context="$1"  # e.g., "before_maintenance" or "after_maintenance"
+
+    log_info "Repository health check (${context}):"
+
+    # Get repository status
+    local repo_status
+    if repo_status=$("${KOPIA[@]}" repository status --json 2>/dev/null); then
+        # Extract and log key metrics
+        local total_size content_count unique_count blob_count
+        total_size=$(echo "${repo_status}" | jq -r '.contentBytes // 0' 2>/dev/null || echo "0")
+        content_count=$(echo "${repo_status}" | jq -r '.contentCount // 0' 2>/dev/null || echo "0")
+        unique_count=$(echo "${repo_status}" | jq -r '.uniqueContentCount // 0' 2>/dev/null || echo "0")
+        blob_count=$(echo "${repo_status}" | jq -r '.blobCount // 0' 2>/dev/null || echo "0")
+
+        # Convert bytes to human-readable format
+        local size_gb=$(echo "scale=2; ${total_size} / (1024*1024*1024)" | bc 2>/dev/null || echo "0")
+
+        log_info "  REPO_SIZE_BYTES: ${total_size}"
+        log_info "  REPO_SIZE_GB: ${size_gb}"
+        log_info "  CONTENT_COUNT: ${content_count}"
+        log_info "  UNIQUE_CONTENT_COUNT: ${unique_count}"
+        log_info "  BLOB_COUNT: ${blob_count}"
+
+        # Calculate deduplication ratio if possible
+        if [[ ${unique_count} -gt 0 ]] && [[ ${content_count} -gt 0 ]]; then
+            local dedup_ratio=$(echo "scale=2; ${content_count} / ${unique_count}" | bc 2>/dev/null || echo "N/A")
+            log_info "  DEDUPLICATION_RATIO: ${dedup_ratio}"
+        fi
+    else
+        log_error "Failed to get repository status"
+    fi
+
+    # Check maintenance info
+    local maint_info
+    if maint_info=$("${KOPIA[@]}" maintenance info --json 2>/dev/null); then
+        local next_full next_quick
+        next_full=$(echo "${maint_info}" | jq -r '.nextFullMaintenanceTime // "N/A"' 2>/dev/null || echo "N/A")
+        next_quick=$(echo "${maint_info}" | jq -r '.nextQuickMaintenanceTime // "N/A"' 2>/dev/null || echo "N/A")
+
+        log_info "  NEXT_FULL_MAINTENANCE: ${next_full}"
+        log_info "  NEXT_QUICK_MAINTENANCE: ${next_quick}"
+    fi
+}
+
 # Error and exit if a variable isn't defined
 # check_var_defined "MY_VAR"
 function check_var_defined {
@@ -1420,21 +1466,96 @@ function do_maintenance {
     log_info "=== Starting maintenance operation ==="
     local maint_start_time=$(date +%s)
 
-    log_debug "Running full maintenance: ${KOPIA[*]} maintenance run --full"
+    # Log repository health before maintenance
+    log_repository_health "before_maintenance"
+
+    # Run maintenance with proper error handling
+    log_info "Running full maintenance cycle..."
+    log_debug "Maintenance command: ${KOPIA[*]} maintenance run --full"
+
+    local maint_exit_code=0
     if ! "${KOPIA[@]}" maintenance run --full; then
-        log_error "Warning: Maintenance operation failed, but continuing"
-        # Don't fail the entire operation for maintenance issues
-        return 0
+        maint_exit_code=$?
+        log_error "Maintenance operation failed with exit code: ${maint_exit_code}"
+
+        # For dedicated maintenance mode, we should fail to trigger CronJob retry logic
+        if [[ "${DIRECTION}" == "maintenance" ]]; then
+            log_error "Maintenance failed in dedicated maintenance mode"
+            log_info "Kubernetes CronJob will handle retry based on configured policy"
+            # Return failure to allow Kubernetes retry logic to work
+            return 1
+        else
+            # For backup operations, maintenance failure is non-critical
+            log_error "Warning: Maintenance operation failed during backup, but continuing"
+            return 0
+        fi
     fi
 
+    # Log repository health after maintenance
+    log_repository_health "after_maintenance"
+
     local maint_end_time=$(date +%s)
-    log_timing "Maintenance operation took $((maint_end_time - maint_start_time)) seconds"
-    log_info "Maintenance completed successfully"
+    local maint_duration=$((maint_end_time - maint_start_time))
+    log_timing "Maintenance operation completed in ${maint_duration} seconds"
+
+    # Log maintenance completion status for monitoring
+    if [[ ${maint_exit_code} -eq 0 ]]; then
+        log_info "MAINTENANCE_STATUS: SUCCESS"
+        log_info "MAINTENANCE_DURATION: ${maint_duration}"
+    else
+        log_info "MAINTENANCE_STATUS: FAILED"
+        log_info "MAINTENANCE_DURATION: ${maint_duration}"
+        log_info "MAINTENANCE_EXIT_CODE: ${maint_exit_code}"
+    fi
+
+    log_info "Maintenance operation finished"
+    return 0
+}
+
+# Apply retention policy globally (for maintenance mode)
+function do_retention_global {
+    log_info "=== Applying global retention policy ==="
+
+    declare -a POLICY_CMD
+    POLICY_CMD=("${KOPIA[@]}" "policy" "set" "--global")
+
+    # Build retention policy options
+    if [[ -n "${KOPIA_RETAIN_HOURLY}" ]]; then
+        POLICY_CMD+=(--keep-hourly="${KOPIA_RETAIN_HOURLY}")
+    fi
+    if [[ -n "${KOPIA_RETAIN_DAILY}" ]]; then
+        POLICY_CMD+=(--keep-daily="${KOPIA_RETAIN_DAILY}")
+    fi
+    if [[ -n "${KOPIA_RETAIN_WEEKLY}" ]]; then
+        POLICY_CMD+=(--keep-weekly="${KOPIA_RETAIN_WEEKLY}")
+    fi
+    if [[ -n "${KOPIA_RETAIN_MONTHLY}" ]]; then
+        POLICY_CMD+=(--keep-monthly="${KOPIA_RETAIN_MONTHLY}")
+    fi
+    if [[ -n "${KOPIA_RETAIN_YEARLY}" ]]; then
+        POLICY_CMD+=(--keep-annual="${KOPIA_RETAIN_YEARLY}")
+    fi
+    if [[ -n "${KOPIA_RETAIN_LATEST}" ]]; then
+        POLICY_CMD+=(--keep-latest="${KOPIA_RETAIN_LATEST}")
+    fi
+
+    # Apply policy if any retention options are set
+    if [[ ${#POLICY_CMD[@]} -gt 4 ]]; then
+        log_info "Setting global retention policy..."
+        if ! "${POLICY_CMD[@]}"; then
+            log_error "Warning: Failed to set global retention policy, continuing with defaults"
+            # Don't fail the entire operation for policy setting issues
+        else
+            log_info "Global retention policy applied successfully"
+        fi
+    else
+        log_info "No retention policy settings specified, using defaults"
+    fi
 }
 
 function do_retention {
     echo "=== Applying retention policy ==="
-    
+
     declare -a POLICY_CMD
     POLICY_CMD=("${KOPIA[@]}" "policy" "set" "${DATA_DIR}")
     
@@ -1454,7 +1575,10 @@ function do_retention {
     if [[ -n "${KOPIA_RETAIN_YEARLY}" ]]; then
         POLICY_CMD+=(--keep-annual="${KOPIA_RETAIN_YEARLY}")
     fi
-    
+    if [[ -n "${KOPIA_RETAIN_LATEST}" ]]; then
+        POLICY_CMD+=(--keep-latest="${KOPIA_RETAIN_LATEST}")
+    fi
+
     # Apply policy if any retention options are set
     if [[ ${#POLICY_CMD[@]} -gt 4 ]]; then
         if ! "${POLICY_CMD[@]}"; then
@@ -1668,19 +1792,43 @@ function do_restore {
 }
 
 echo "Testing mandatory env variables"
-# Check the mandatory env variables
-for var in KOPIA_PASSWORD \
-           DATA_DIR \
-           ; do
-    check_var_defined $var
-done
+# Check the mandatory env variables based on operation mode
+if [[ "${DIRECTION}" == "maintenance" ]]; then
+    # For maintenance mode, only password is required
+    log_info "Maintenance mode: Checking minimal requirements"
+    check_var_defined KOPIA_PASSWORD
+    # Set a dummy DATA_DIR if not provided (won't be used)
+    if [[ -z "${DATA_DIR}" ]]; then
+        export DATA_DIR="/data"
+        log_debug "Set dummy DATA_DIR for maintenance mode: ${DATA_DIR}"
+    fi
+else
+    # For backup/restore operations, check all required variables
+    for var in KOPIA_PASSWORD \
+               DATA_DIR \
+               ; do
+        check_var_defined $var
+    done
+fi
 
 # Validate cache directory is writable
 if [[ ! -w "${KOPIA_CACHE_DIR}" ]]; then
     error 1 "Cache directory ${KOPIA_CACHE_DIR} is not writable"
 fi
 
-echo "Cache directory validation passed"
+log_info "Cache directory validation passed"
+
+# Skip additional validations for maintenance mode
+if [[ "${DIRECTION}" == "maintenance" ]]; then
+    log_info "Maintenance mode: Skipping data directory checks"
+else
+    # Validate data directory exists and is accessible for backup/restore
+    if [[ ! -d "${DATA_DIR}" ]]; then
+        error 1 "Data directory ${DATA_DIR} does not exist"
+    fi
+    log_info "Data directory validation passed"
+fi
+
 echo ""
 
 # Cache directory already configured above
@@ -1689,7 +1837,10 @@ echo ""
 export KOPIA_PASSWORD
 
 START_TIME=$SECONDS
+OPERATION_START_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 log_info "=== Starting kopia operations ==="
+log_info "Operation start time: ${OPERATION_START_TIMESTAMP}"
+log_info "Operation mode: ${DIRECTION:-command-based}"
 
 # Determine operation based on DIRECTION or arguments
 if [[ "${DIRECTION}" == "source" ]]; then
@@ -1704,6 +1855,33 @@ elif [[ "${DIRECTION}" == "destination" ]]; then
     ensure_connected
     do_restore
     sync -f "${DATA_DIR}"
+elif [[ "${DIRECTION}" == "maintenance" ]]; then
+    log_info "=== Running MAINTENANCE ONLY ===="
+    log_info "Maintenance mode: Dedicated maintenance operation"
+    log_info "Username: ${KOPIA_OVERRIDE_USERNAME:-maintenance@volsync}"
+    log_info "Hostname: ${KOPIA_OVERRIDE_HOSTNAME:-maintenance}"
+
+    # For maintenance mode, skip data directory checks
+    log_info "Skipping data directory validation (not needed for maintenance)"
+
+    # Connect to repository
+    ensure_connected
+
+    # Apply retention policies before maintenance if configured
+    # This ensures old snapshots are marked for deletion before cleanup
+    if [[ -n "${KOPIA_RETAIN_HOURLY}" ]] || [[ -n "${KOPIA_RETAIN_DAILY}" ]] ||
+       [[ -n "${KOPIA_RETAIN_WEEKLY}" ]] || [[ -n "${KOPIA_RETAIN_MONTHLY}" ]] ||
+       [[ -n "${KOPIA_RETAIN_YEARLY}" ]] || [[ -n "${KOPIA_RETAIN_LATEST}" ]]; then
+        log_info "Applying global retention policy before maintenance..."
+        do_retention_global
+    else
+        log_info "No retention policy configured, proceeding with maintenance"
+    fi
+
+    # Run maintenance operations
+    do_maintenance
+
+    log_info "Maintenance-only operation completed"
 else
     # Execute operations based on arguments (current VolSync approach)
     for op in "$@"; do
@@ -1730,6 +1908,21 @@ else
     done
 fi
 
-log_timing "Total kopia operation completed in $(( SECONDS - START_TIME ))s"
+OPERATION_END_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+OPERATION_DURATION=$(( SECONDS - START_TIME ))
+
+log_timing "Total kopia operation completed in ${OPERATION_DURATION}s"
+log_info "Operation end time: ${OPERATION_END_TIMESTAMP}"
+
+# Log operation summary for monitoring
+log_info "=== OPERATION SUMMARY ==="
+log_info "OPERATION_TYPE: ${DIRECTION:-command-based}"
+log_info "OPERATION_START: ${OPERATION_START_TIMESTAMP}"
+log_info "OPERATION_END: ${OPERATION_END_TIMESTAMP}"
+log_info "OPERATION_DURATION_SECONDS: ${OPERATION_DURATION}"
+if [[ "${DIRECTION}" == "maintenance" ]]; then
+    log_info "MAINTENANCE_USERNAME: ${KOPIA_OVERRIDE_USERNAME:-maintenance@volsync}"
+    log_info "MAINTENANCE_HOSTNAME: ${KOPIA_OVERRIDE_HOSTNAME:-maintenance}"
+fi
 log_info "=== Operation finished ==="
 log_info "=== Done ==="

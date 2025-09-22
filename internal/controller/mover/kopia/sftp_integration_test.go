@@ -161,7 +161,7 @@ func TestSFTPPasswordConfiguration(t *testing.T) {
 				} else {
 					volume := podSpec.Volumes[0]
 					foundKey := false
-					for _, item := range volume.VolumeSource.Secret.Items {
+					for _, item := range volume.Secret.Items {
 						if item.Path == "sftp_key" {
 							foundKey = true
 							// Verify permissions
@@ -308,7 +308,7 @@ func TestAdditionalArgsWithAllRepositoryTypes(t *testing.T) {
 		{
 			name: "Azure repository",
 			secretData: map[string][]byte{
-				"KOPIA_AZURE_CONTAINER":      []byte("my-container"),
+				"KOPIA_AZURE_CONTAINER":       []byte("my-container"),
 				"KOPIA_AZURE_STORAGE_ACCOUNT": []byte("storage-account"),
 				"KOPIA_AZURE_STORAGE_KEY":     []byte("storage-key"),
 			},

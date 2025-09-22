@@ -241,6 +241,9 @@ type KopiaRetainPolicy struct {
 	// Yearly defines the number of snapshots to be kept yearly
 	//+optional
 	Yearly *int32 `json:"yearly,omitempty"`
+	// Latest defines the number of latest snapshots to keep
+	//+optional
+	Latest *int32 `json:"latest,omitempty"`
 }
 
 // KopiaActions defines pre/post snapshot actions
@@ -254,6 +257,43 @@ type KopiaActions struct {
 }
 
 type ReplicationSourceKopiaCA CustomCASpec
+
+// MaintenanceCronJobSpec defines the configuration for Kopia maintenance CronJobs
+type MaintenanceCronJobSpec struct {
+	// Enabled determines if maintenance CronJobs should be created.
+	// When false, no maintenance CronJob will be created.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// Schedule is a cron schedule for when maintenance should run.
+	// The schedule is interpreted in the controller's timezone.
+	// +kubebuilder:validation:Pattern=`^(@(annually|yearly|monthly|weekly|daily|hourly))|((((\d+,)*\d+|(\d+(\/|-)\d+)|\*(\/\d+)?)\s?){5})$`
+	// +kubebuilder:default="0 2 * * *"
+	// +optional
+	Schedule string `json:"schedule,omitempty"`
+	// SuccessfulJobsHistoryLimit specifies how many successful maintenance Jobs
+	// should be kept. Defaults to 3.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=3
+	// +optional
+	SuccessfulJobsHistoryLimit *int32 `json:"successfulJobsHistoryLimit,omitempty"`
+	// FailedJobsHistoryLimit specifies how many failed maintenance Jobs
+	// should be kept. Defaults to 1.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=1
+	// +optional
+	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
+	// Suspend can be used to temporarily stop maintenance. When true, the
+	// CronJob will not create new Jobs, but existing Jobs will be allowed
+	// to complete.
+	// +optional
+	Suspend *bool `json:"suspend,omitempty"`
+	// Resources represents compute resources required by the maintenance container.
+	// If not specified, defaults to 256Mi memory request and 1Gi memory limit.
+	// More info: https://kubernetes.io/docs/concepts/configuration/manage-compute-resources-container/
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
 
 // ReplicationSourceKopiaSpec defines the field for kopia in replicationSource.
 type ReplicationSourceKopiaSpec struct {
@@ -271,7 +311,8 @@ type ReplicationSourceKopiaSpec struct {
 	// Users can use 'kopia benchmark compression' to test which algorithm works best for their data.
 	//
 	// Supported algorithms (as of Kopia documentation):
-	// - s2 variants: s2-default, s2-better, s2-parallel-4, s2-parallel-8 (s2-parallel-n supports various concurrency levels)
+	// - s2 variants: s2-default, s2-better, s2-parallel-4, s2-parallel-8
+	//   (s2-parallel-n supports various concurrency levels)
 	// - zstd variants: zstd (standard), zstd-fastest, zstd-better-compression, zstd-best-compression
 	// - gzip variants: gzip, gzip-best-speed, gzip-best-compression
 	// - pgzip variants (parallel gzip): pgzip, pgzip-best-speed, pgzip-best-compression
@@ -292,9 +333,16 @@ type ReplicationSourceKopiaSpec struct {
 	// CacheAccessModes can be used to set the accessModes of kopia metadata cache volume
 	//+optional
 	CacheAccessModes []corev1.PersistentVolumeAccessMode `json:"cacheAccessModes,omitempty"`
-	// MaintenanceIntervalDays define how often to run maintenance
+	// MaintenanceIntervalDays define how often to run maintenance (deprecated - use MaintenanceCronJob instead)
+	// A value of 0 disables maintenance. Defaults to 7 if not specified.
+	// +kubebuilder:deprecated:warning="MaintenanceIntervalDays is deprecated. Use MaintenanceCronJob for more flexible scheduling"
 	//+optional
 	MaintenanceIntervalDays *int32 `json:"maintenanceIntervalDays,omitempty"`
+	// MaintenanceCronJob defines the configuration for scheduled maintenance operations
+	// using Kubernetes CronJobs. This provides more flexibility than MaintenanceIntervalDays
+	// by allowing cron-based scheduling and additional job configuration options.
+	//+optional
+	MaintenanceCronJob *MaintenanceCronJobSpec `json:"maintenanceCronJob,omitempty"`
 	// Actions defines pre/post snapshot actions
 	//+optional
 	Actions *KopiaActions `json:"actions,omitempty"`
@@ -343,6 +391,15 @@ type ReplicationSourceKopiaStatus struct {
 	// lastMaintenance in the object holding the time of last maintenance
 	//+optional
 	LastMaintenance *metav1.Time `json:"lastMaintenance,omitempty"`
+	// nextScheduledMaintenance is the next scheduled maintenance time
+	//+optional
+	NextScheduledMaintenance *metav1.Time `json:"nextScheduledMaintenance,omitempty"`
+	// maintenanceFailures counts the number of consecutive maintenance failures
+	//+optional
+	MaintenanceFailures int `json:"maintenanceFailures,omitempty"`
+	// maintenanceCronJob is the name of the maintenance CronJob
+	//+optional
+	MaintenanceCronJob string `json:"maintenanceCronJob,omitempty"`
 }
 
 // define the Syncthing field

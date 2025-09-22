@@ -13,6 +13,7 @@ Kopia-based backup
    backup-configuration
    restore-configuration
    cross-namespace-restore
+   maintenance-cronjobs
    additional-args
    troubleshooting
    custom-ca
@@ -68,7 +69,8 @@ to Kopia for advanced use cases not directly exposed in the API. This enables fi
 of performance, exclusions, and other Kopia features while maintaining security.
 
 **Maintenance**: Kopia's maintenance operations (equivalent to Restic's prune)
-are more efficient and can run concurrently with backups.
+are more efficient and can run concurrently with backups. VolSync now provides
+dedicated maintenance CronJobs for decoupled, scalable maintenance operations.
 
 **Security**: The Kopia mover in VolSync supports enhanced security settings including
 ``readOnlyRootFilesystem: true`` in pod security contexts, with automatic adjustments
@@ -104,7 +106,16 @@ schedule, and backup options.
 
 See :doc:`backup-configuration` for backup setup and configuration options.
 
-**3. Set up Restore Operations**
+**3. Configure Maintenance (Optional)**
+
+VolSync automatically handles repository maintenance through dedicated CronJobs.
+This provides better resource management and flexible scheduling compared to the
+legacy maintenanceIntervalDays approach.
+
+See :doc:`maintenance-cronjobs` for maintenance CronJob configuration, migration
+from maintenanceIntervalDays, and troubleshooting.
+
+**4. Set up Restore Operations**
 
 When needed, configure a ReplicationDestination to restore data from your backups.
 Identity configuration is now OPTIONAL - VolSync automatically determines the identity
@@ -116,7 +127,7 @@ the ``sourceIdentity`` helper field for cross-namespace restores, and enhanced e
 For cross-namespace restore scenarios including disaster recovery and environment cloning,
 see :doc:`cross-namespace-restore`.
 
-**4. Understand Identity Management**
+**5. Understand Identity Management**
 
 VolSync automatically manages identity for you! When no identity is specified,
 it generates a username from the destination name and namespace, and uses the
@@ -125,7 +136,7 @@ namespace as the hostname. This makes simple restores configuration-free.
 See :doc:`hostname-design` for understanding the intentional hostname design,
 and :doc:`multi-tenancy` for multi-tenancy configuration and customization options.
 
-**5. Troubleshooting & Debugging**
+**6. Troubleshooting & Debugging**
 
 .. important::
    **Having Issues? Enable Debug Logging!**
@@ -145,14 +156,14 @@ and :doc:`multi-tenancy` for multi-tenancy configuration and customization optio
    - Enhanced error reporting and snapshot discovery
    - Preventing cache PVC from filling with logs
 
-**6. Advanced Customization**
+**7. Advanced Customization**
 
 For advanced use cases, you can pass additional command-line arguments to Kopia
 for features not directly exposed by VolSync's API.
 
 See :doc:`additional-args` for using additional Kopia arguments safely.
 
-**7. Custom CA (If Needed)**
+**8. Custom CA (If Needed)**
 
 If using self-signed certificates, configure custom certificate authority settings.
 
@@ -204,6 +215,10 @@ Here's a complete example showing how to set up a basic Kopia backup:
          weekly: 4       # Keep 4 weekly snapshots
          monthly: 12     # Keep 12 monthly snapshots
        compression: "zstd"  # Use zstd compression
+       # Optional: Configure maintenance CronJob (enabled by default)
+       maintenanceCronJob:
+         enabled: true
+         schedule: "0 3 * * *"  # Maintenance at 3 AM (after backups)
 
 **Step 3: Restore when needed**
 
@@ -296,6 +311,11 @@ The Kopia documentation has been organized into focused sections for easier navi
    Comprehensive guide for restoring Kopia backups across namespaces. Covers disaster recovery,
    environment cloning, namespace migration, and testing procedures with detailed examples,
    security considerations, and troubleshooting steps.
+
+:doc:`maintenance-cronjobs`
+   Complete guide to the new maintenance CronJob feature that provides decoupled, scalable
+   repository maintenance operations. Covers configuration, migration from maintenanceIntervalDays,
+   repository deduplication, monitoring, and troubleshooting.
 
 :doc:`troubleshooting`
    Comprehensive troubleshooting guide covering enhanced error reporting, snapshot discovery,
