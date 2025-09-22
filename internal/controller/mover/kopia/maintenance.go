@@ -371,11 +371,11 @@ func (m *MaintenanceManager) buildMaintenanceEnvVars(repoConfig *RepositoryConfi
 			Value: "/data", // Not used for maintenance, but required by entry.sh
 		},
 		{
-			Name:  envKopiaOverrideUsername,
+			Name:  envKopiaOverrideMaintenanceUsername,
 			Value: defaultMaintenanceUsername,
 		},
 		{
-			Name:  envKopiaOverrideHostname,
+			Name:  envKopiaOverrideMaintenanceHostname,
 			Value: repoConfig.Namespace,
 		},
 	}

@@ -70,8 +70,11 @@ const (
 	// Environment variable names for Kopia configuration
 	envKopiaOverrideUsername = "KOPIA_OVERRIDE_USERNAME"
 	envKopiaOverrideHostname = "KOPIA_OVERRIDE_HOSTNAME"
-	envSftpPassword          = "SFTP_PASSWORD"
-	envKopiaAdditionalArgs   = "KOPIA_ADDITIONAL_ARGS"
+	// Dedicated maintenance environment variables
+	envKopiaOverrideMaintenanceUsername = "KOPIA_OVERRIDE_MAINTENANCE_USERNAME"
+	envKopiaOverrideMaintenanceHostname = "KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME"
+	envSftpPassword                     = "SFTP_PASSWORD"
+	envKopiaAdditionalArgs              = "KOPIA_ADDITIONAL_ARGS"
 )
 
 // PolicyConfigSecret wraps a Secret for policy configuration mounting

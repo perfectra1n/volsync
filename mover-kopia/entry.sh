@@ -177,6 +177,8 @@ echo "AWS_DEFAULT_REGION: $([ -n "${AWS_DEFAULT_REGION}" ] && echo "[SET]" || ec
 echo "AWS_REGION: $([ -n "${AWS_REGION}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_OVERRIDE_USERNAME: $([ -n "${KOPIA_OVERRIDE_USERNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_OVERRIDE_HOSTNAME: $([ -n "${KOPIA_OVERRIDE_HOSTNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
+echo "KOPIA_OVERRIDE_MAINTENANCE_USERNAME: $([ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
+echo "KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME: $([ -n "${KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_SOURCE_PATH_OVERRIDE: $([ -n "${KOPIA_SOURCE_PATH_OVERRIDE}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_MANUAL_CONFIG: $([ -n "${KOPIA_MANUAL_CONFIG}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_RESTORE_AS_OF: $([ -n "${KOPIA_RESTORE_AS_OF}" ] && echo "[SET]" || echo "[NOT SET]")"
@@ -1905,8 +1907,8 @@ elif [[ "${DIRECTION}" == "destination" ]]; then
 elif [[ "${DIRECTION}" == "maintenance" ]]; then
     log_info "=== Running MAINTENANCE ONLY ===="
     log_info "Maintenance mode: Dedicated maintenance operation"
-    log_info "Username: ${KOPIA_OVERRIDE_USERNAME:-maintenance@volsync}"
-    log_info "Hostname: ${KOPIA_OVERRIDE_HOSTNAME:-maintenance}"
+    log_info "Maintenance Username: ${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance@volsync}"
+    log_info "Maintenance Hostname: ${KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME:-maintenance}"
 
     # For maintenance mode, skip data directory checks
     log_info "Skipping data directory validation (not needed for maintenance)"
