@@ -224,51 +224,10 @@ echo ""
 
 KOPIA=("kopia" "--config-file=${KOPIA_CACHE_DIR}/kopia.config" "--log-dir=${KOPIA_CACHE_DIR}/logs" "--log-level=${KOPIA_LOG_LEVEL}" "--file-log-level=${KOPIA_FILE_LOG_LEVEL}" "--log-dir-max-files=${KOPIA_LOG_DIR_MAX_FILES}" "--log-dir-max-age=${KOPIA_LOG_DIR_MAX_AGE}")
 
-# For maintenance mode, use the maintenance username/hostname overrides
-# This ensures maintenance commands run with the correct identity
-if [[ "${DIRECTION}" == "maintenance" ]]; then
-    if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
-        # Parse the maintenance username (format: user@host)
-        # If it contains @, split it into username and hostname
-        if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
-            MAINTENANCE_USER="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME%%@*}"
-            MAINTENANCE_HOST="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME##*@}"
-            log_info "Maintenance mode: Setting username to '${MAINTENANCE_USER}' and hostname to '${MAINTENANCE_HOST}'"
-            KOPIA+=("--override-username=${MAINTENANCE_USER}")
-            KOPIA+=("--override-hostname=${MAINTENANCE_HOST}")
-        else
-            # If no @, use it as username only, with default hostname 'volsync'
-            log_info "Maintenance mode: Setting username to '${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}' and hostname to 'volsync'"
-            KOPIA+=("--override-username=${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}")
-            KOPIA+=("--override-hostname=volsync")
-        fi
-    elif [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-        # Fall back to regular overrides if maintenance-specific ones aren't set
-        if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
-            log_info "Maintenance mode: Using general username override '${KOPIA_OVERRIDE_USERNAME}'"
-            KOPIA+=("--override-username=${KOPIA_OVERRIDE_USERNAME}")
-        fi
-        if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-            log_info "Maintenance mode: Using general hostname override '${KOPIA_OVERRIDE_HOSTNAME}'"
-            KOPIA+=("--override-hostname=${KOPIA_OVERRIDE_HOSTNAME}")
-        fi
-    else
-        # Default maintenance identity
-        log_info "Maintenance mode: Using default maintenance identity 'maintenance@volsync'"
-        KOPIA+=("--override-username=maintenance")
-        KOPIA+=("--override-hostname=volsync")
-    fi
-else
-    # For non-maintenance modes, apply regular username/hostname overrides if set
-    if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
-        log_info "Setting username override: ${KOPIA_OVERRIDE_USERNAME}"
-        KOPIA+=("--override-username=${KOPIA_OVERRIDE_USERNAME}")
-    fi
-    if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-        log_info "Setting hostname override: ${KOPIA_OVERRIDE_HOSTNAME}"
-        KOPIA+=("--override-hostname=${KOPIA_OVERRIDE_HOSTNAME}")
-    fi
-fi
+# Kopia uses 'repository set-client' command to set client identity after connection.
+# The client identity (username@hostname) determines snapshot ownership.
+# We no longer use environment variables KOPIA_USERNAME/KOPIA_HOSTNAME as they don't
+# affect the client identity for an already connected repository.
 
 if [[ -n "${CUSTOM_CA}" ]]; then
     echo "Using custom CA certificate at: ${CUSTOM_CA}"
@@ -384,18 +343,98 @@ function check_contents {
     fi
 }
 
-# Add username/hostname overrides to command array if specified
-# add_user_overrides command_array_name
-function add_user_overrides {
-    local -n cmd_array=$1
-    
-    if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
-        echo "Using username override: ${KOPIA_OVERRIDE_USERNAME}"
-        cmd_array+=(--override-username="${KOPIA_OVERRIDE_USERNAME}")
+# Set the client identity using 'kopia repository set-client' command
+# This must be called AFTER successfully connecting to the repository
+function set_client_identity {
+    local username=""
+    local hostname=""
+    local should_set_identity=false
+
+    if [[ "${DIRECTION}" == "maintenance" ]]; then
+        # In maintenance mode, always set identity
+        should_set_identity=true
+
+        if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
+            # Parse the maintenance username (format: user@host or just user)
+            if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
+                # Split into user and host
+                username="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME%%@*}"
+                hostname="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME##*@}"
+                log_info "Maintenance mode: Setting client identity to '${username}@${hostname}'"
+            else
+                # If no @, use it as username with hostname 'volsync'
+                username="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}"
+                hostname="volsync"
+                log_info "Maintenance mode: Setting client identity to '${username}@${hostname}'"
+            fi
+        elif [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+            # Fall back to regular overrides if set
+            if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
+                username="${KOPIA_OVERRIDE_USERNAME}"
+            else
+                username="maintenance"
+            fi
+            if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+                hostname="${KOPIA_OVERRIDE_HOSTNAME}"
+            else
+                hostname="volsync"
+            fi
+            log_info "Maintenance mode: Setting client identity to '${username}@${hostname}'"
+        else
+            # Default maintenance identity
+            username="maintenance"
+            hostname="volsync"
+            log_info "Maintenance mode: Setting client identity to 'maintenance@volsync'"
+        fi
+    else
+        # Regular mode: only set identity if overrides are provided
+        if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+            should_set_identity=true
+
+            if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
+                username="${KOPIA_OVERRIDE_USERNAME}"
+            else
+                # Get current system username if only hostname override is set
+                username="$(whoami)"
+            fi
+
+            if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+                hostname="${KOPIA_OVERRIDE_HOSTNAME}"
+            else
+                # Get current system hostname if only username override is set
+                hostname="$(hostname)"
+            fi
+
+            log_info "Setting client identity to '${username}@${hostname}'"
+        fi
     fi
-    if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-        echo "Using hostname override: ${KOPIA_OVERRIDE_HOSTNAME}"
-        cmd_array+=(--override-hostname="${KOPIA_OVERRIDE_HOSTNAME}")
+
+    # Execute the set-client command if we need to set identity
+    if [[ "${should_set_identity}" == "true" ]]; then
+        log_info "Applying client identity configuration..."
+
+        local SET_CLIENT_CMD=("${KOPIA[@]}" repository set-client)
+
+        if [[ -n "${username}" ]]; then
+            SET_CLIENT_CMD+=("--username=${username}")
+        fi
+
+        if [[ -n "${hostname}" ]]; then
+            SET_CLIENT_CMD+=("--hostname=${hostname}")
+        fi
+
+        log_debug "Set client command: ${SET_CLIENT_CMD[*]}"
+
+        if "${SET_CLIENT_CMD[@]}"; then
+            log_info "Client identity set successfully to ${username}@${hostname}"
+        else
+            log_error "Failed to set client identity - this may affect snapshot ownership"
+            # Don't fail here, as the repository is connected and can still work
+            # Just warn about potential ownership issues
+            echo "Warning: Client identity could not be set. Snapshots may have unexpected ownership."
+        fi
+    else
+        log_info "Using default Kopia client identity (no overrides specified)"
     fi
 }
 
@@ -429,9 +468,6 @@ function execute_repository_command {
     local array_name=$1
     local -n cmd_array_ref=$array_name
     local operation_type=$2  # "connect" or "create"
-
-    # Always add user overrides (username/hostname)
-    add_user_overrides "$array_name"
 
     # For create operations, add manual config params
     if [[ "${operation_type}" == "create" ]]; then
@@ -885,8 +921,7 @@ function ensure_connected {
             # Build command array for JSON config connection
             declare -a JSON_CONFIG_CMD
             JSON_CONFIG_CMD=("${KOPIA[@]}" repository connect from-config --file="${KOPIA_JSON_CONFIG_FILE}")
-            # Add user overrides and additional args even for JSON config
-            add_user_overrides "JSON_CONFIG_CMD"
+            # Add additional args for JSON config
             add_additional_args "JSON_CONFIG_CMD"
             "${JSON_CONFIG_CMD[@]}"
             local json_result=$?
@@ -910,8 +945,7 @@ function ensure_connected {
             # Build command array for legacy config connection
             declare -a LEGACY_CONFIG_CMD
             LEGACY_CONFIG_CMD=("${KOPIA[@]}" repository connect from-config --config-file /credentials/repository.config)
-            # Add user overrides and additional args even for legacy config
-            add_user_overrides "LEGACY_CONFIG_CMD"
+            # Add additional args for legacy config
             add_additional_args "LEGACY_CONFIG_CMD"
             "${LEGACY_CONFIG_CMD[@]}"
             local config_result=$?
@@ -968,7 +1002,10 @@ function ensure_connected {
     fi
     
     echo ""
-    
+
+    # Set client identity after successful connection (for snapshot ownership)
+    set_client_identity
+
     # Set cache directory after successful connection
     log_info "=== Configuring cache directory after connection ==="
     log_debug "Cache directory path: ${KOPIA_CACHE_DIR}"
@@ -1470,10 +1507,8 @@ function do_backup {
         SNAPSHOT_CMD+=(--override-source="${KOPIA_SOURCE_PATH_OVERRIDE}")
     fi
 
-    # Note: Username/hostname overrides are NOT added here because:
-    # - The --override-username and --override-hostname flags don't exist for 'kopia snapshot create'
-    # - These flags only exist for 'kopia repository connect/create' commands
-    # - The identity for snapshots is determined by the repository connection
+    # Note: The client identity for snapshots is set via 'repository set-client' command
+    # which is executed in the set_client_identity() function after repository connection
 
     # Add additional arguments if specified
     add_additional_args SNAPSHOT_CMD
