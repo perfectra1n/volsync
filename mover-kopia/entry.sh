@@ -1462,9 +1462,56 @@ function do_backup {
     log_timing "Total backup operation took $((backup_end_time - backup_start_time)) seconds"
 }
 
+function ensure_maintenance_ownership {
+    log_info "=== Checking maintenance ownership ==="
+
+    local current_username="${KOPIA_OVERRIDE_USERNAME:-maintenance@volsync}"
+    local current_hostname="${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}"
+    local expected_owner="${current_username}@${current_hostname}"
+
+    # Check current maintenance owner
+    log_info "Checking current maintenance owner..."
+    local maintenance_info
+    if maintenance_info=$("${KOPIA[@]}" maintenance info 2>&1); then
+        log_info "Current maintenance info: ${maintenance_info}"
+
+        # Check if we're already the owner
+        if echo "${maintenance_info}" | grep -q "Owner:.*${expected_owner}"; then
+            log_info "✓ Already maintenance owner: ${expected_owner}"
+            return 0
+        fi
+
+        # Try to claim ownership
+        log_info "Taking maintenance ownership for: ${expected_owner}"
+        if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
+            log_info "✓ Successfully claimed maintenance ownership"
+            return 0
+        else
+            log_warn "Failed to claim maintenance ownership, attempting maintenance anyway"
+            log_info "This may fail if another user is the designated maintenance owner"
+            return 1
+        fi
+    else
+        log_warn "Could not retrieve maintenance info: ${maintenance_info}"
+        log_info "Attempting to set maintenance owner anyway..."
+
+        # Try to set ownership even if info command failed
+        if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
+            log_info "✓ Successfully set maintenance ownership"
+            return 0
+        else
+            log_warn "Failed to set maintenance ownership, proceeding with maintenance attempt"
+            return 1
+        fi
+    fi
+}
+
 function do_maintenance {
     log_info "=== Starting maintenance operation ==="
     local maint_start_time=$(date +%s)
+
+    # Ensure we have maintenance ownership before running maintenance
+    ensure_maintenance_ownership
 
     # Log repository health before maintenance
     log_repository_health "before_maintenance"
