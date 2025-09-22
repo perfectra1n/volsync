@@ -21,11 +21,14 @@ package kopia
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,14 +38,31 @@ import (
 )
 
 func TestMaintenanceManager(t *testing.T) {
+	// Set operator namespace for tests
+	os.Setenv("POD_NAMESPACE", "test-operator-namespace")
+	defer os.Unsetenv("POD_NAMESPACE")
+
 	// Create a fake client with scheme
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = batchv1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
 	_ = volsyncv1alpha1.AddToScheme(scheme)
 
 	t.Run("ReconcileMaintenanceForSource", func(t *testing.T) {
-		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		// Create source secret that will be copied
+		sourceSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: "test-namespace",
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"KOPIA_PASSWORD": []byte("test-password"),
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sourceSecret).Build()
 		logger := logr.Discard()
 		manager := NewMaintenanceManager(client, logger, "test-image:latest")
 
@@ -66,15 +86,29 @@ func TestMaintenanceManager(t *testing.T) {
 			t.Fatalf("Failed to reconcile maintenance: %v", err)
 		}
 
-		// Verify that a CronJob was created
+		// Verify that a CronJob was created in operator namespace
 		cronJobList := &batchv1.CronJobList{}
-		err = client.List(context.Background(), cronJobList, ctrlclient.InNamespace("test-namespace"))
+		err = client.List(context.Background(), cronJobList, ctrlclient.InNamespace("test-operator-namespace"))
 		if err != nil {
 			t.Fatalf("Failed to list CronJobs: %v", err)
 		}
 
+		// Also check all namespaces to debug
+		allCronJobs := &batchv1.CronJobList{}
+		err = client.List(context.Background(), allCronJobs)
+		if err != nil {
+			t.Fatalf("Failed to list all CronJobs: %v", err)
+		}
+
+		if len(allCronJobs.Items) > 0 {
+			t.Logf("Found %d CronJobs in all namespaces:", len(allCronJobs.Items))
+			for _, cj := range allCronJobs.Items {
+				t.Logf("  - %s/%s", cj.Namespace, cj.Name)
+			}
+		}
+
 		if len(cronJobList.Items) != 1 {
-			t.Fatalf("Expected 1 CronJob, got %d", len(cronJobList.Items))
+			t.Fatalf("Expected 1 CronJob in operator namespace, got %d", len(cronJobList.Items))
 		}
 
 		cronJob := cronJobList.Items[0]
@@ -111,13 +145,39 @@ func TestMaintenanceManager(t *testing.T) {
 			t.Errorf("Expected DIRECTION=maintenance environment variable not found")
 		}
 
-		// Verify EnvFrom for repository secret
+		// Verify EnvFrom uses copied secret
 		if len(container.EnvFrom) != 1 {
 			t.Errorf("Expected 1 EnvFrom source, got %d", len(container.EnvFrom))
 		}
-		if container.EnvFrom[0].SecretRef.Name != "test-repo-secret" {
-			t.Errorf("Expected EnvFrom secret reference to test-repo-secret, got %s",
-				container.EnvFrom[0].SecretRef.Name)
+		// The secret should be copied with a prefixed name
+		expectedSecretPrefix := "maintenance-test-namespace-"
+		if container.EnvFrom[0].SecretRef == nil ||
+			!strings.HasPrefix(container.EnvFrom[0].SecretRef.Name, expectedSecretPrefix) {
+			t.Errorf("Expected EnvFrom secret to start with %s, got %v",
+				expectedSecretPrefix, container.EnvFrom[0].SecretRef)
+		}
+
+		// Verify secret was copied to operator namespace
+		secretList := &corev1.SecretList{}
+		err = client.List(context.Background(), secretList, ctrlclient.InNamespace("test-operator-namespace"))
+		if err != nil {
+			t.Fatalf("Failed to list secrets: %v", err)
+		}
+
+		// Should have at least one maintenance secret
+		foundMaintenanceSecret := false
+		for _, secret := range secretList.Items {
+			if secret.Labels[maintenanceSecretLabel] == "true" {
+				foundMaintenanceSecret = true
+				// Verify it has the correct data
+				if string(secret.Data["KOPIA_PASSWORD"]) != "test-password" {
+					t.Errorf("Copied secret has incorrect password data")
+				}
+				break
+			}
+		}
+		if !foundMaintenanceSecret {
+			t.Errorf("Expected to find copied maintenance secret in operator namespace")
 		}
 	})
 
@@ -161,14 +221,15 @@ func TestMaintenanceManager(t *testing.T) {
 	})
 
 	t.Run("CleanupOrphanedMaintenanceCronJobs", func(t *testing.T) {
-		// Create an orphaned CronJob
+		// Create an orphaned CronJob in operator namespace
 		orphanedCronJob := &batchv1.CronJob{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "kopia-maintenance-orphan",
-				Namespace: "test-namespace",
+				Namespace: "test-operator-namespace", // CronJobs are now centralized
 				Labels: map[string]string{
 					maintenanceLabelKey:        "true",
 					maintenanceRepositoryLabel: "orphan-hash",
+					maintenanceNamespaceLabel:  "test-namespace", // Track source namespace
 				},
 			},
 			Spec: batchv1.CronJobSpec{
@@ -190,7 +251,23 @@ func TestMaintenanceManager(t *testing.T) {
 			},
 		}
 
-		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(orphanedCronJob).Build()
+		// Create an orphaned secret
+		orphanedSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "maintenance-test-namespace-orphan",
+				Namespace: "test-operator-namespace",
+				Labels: map[string]string{
+					maintenanceSecretLabel:     "true",
+					maintenanceRepositoryLabel: "orphan-hash",
+					maintenanceNamespaceLabel:  "test-namespace",
+				},
+			},
+			Data: map[string][]byte{
+				"KOPIA_PASSWORD": []byte("orphan"),
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(orphanedCronJob, orphanedSecret).Build()
 		logger := logr.Discard()
 		manager := NewMaintenanceManager(client, logger, "test-image:latest")
 
@@ -200,9 +277,9 @@ func TestMaintenanceManager(t *testing.T) {
 			t.Fatalf("Failed to cleanup orphaned CronJobs: %v", err)
 		}
 
-		// Verify that the orphaned CronJob was deleted
+		// Verify that the orphaned CronJob was deleted from operator namespace
 		cronJobList := &batchv1.CronJobList{}
-		err = client.List(context.Background(), cronJobList, ctrlclient.InNamespace("test-namespace"))
+		err = client.List(context.Background(), cronJobList, ctrlclient.InNamespace("test-operator-namespace"))
 		if err != nil {
 			t.Fatalf("Failed to list CronJobs: %v", err)
 		}
@@ -210,10 +287,23 @@ func TestMaintenanceManager(t *testing.T) {
 		if len(cronJobList.Items) != 0 {
 			t.Fatalf("Expected orphaned CronJob to be deleted, but %d CronJobs remain", len(cronJobList.Items))
 		}
+
+		// Verify that the orphaned secret was also deleted
+		secretList := &corev1.SecretList{}
+		err = client.List(context.Background(), secretList,
+			ctrlclient.InNamespace("test-operator-namespace"),
+			ctrlclient.MatchingLabels{maintenanceSecretLabel: "true"})
+		if err != nil {
+			t.Fatalf("Failed to list secrets: %v", err)
+		}
+
+		if len(secretList.Items) != 0 {
+			t.Fatalf("Expected orphaned secret to be deleted, but %d secrets remain", len(secretList.Items))
+		}
 	})
 
 	t.Run("RepositoryConfigHash", func(t *testing.T) {
-		// Test that the hash is deterministic
+		// Test that the hash is deterministic and only based on repository
 		config1 := &RepositoryConfig{
 			Repository: "repo1",
 			Namespace:  "ns1",
@@ -222,12 +312,13 @@ func TestMaintenanceManager(t *testing.T) {
 
 		config2 := &RepositoryConfig{
 			Repository: "repo1",
-			Namespace:  "ns1",
-			Schedule:   "0 2 * * *",
+			Namespace:  "ns2", // Different namespace
+			Schedule:   "0 3 * * *", // Different schedule
 		}
 
+		// Phase 1: Hash should be the same since only repository matters
 		if config1.Hash() != config2.Hash() {
-			t.Errorf("Expected identical configs to have same hash")
+			t.Errorf("Expected configs with same repository to have same hash regardless of namespace/schedule")
 		}
 
 		// Different repository should have different hash
@@ -240,10 +331,49 @@ func TestMaintenanceManager(t *testing.T) {
 		if config1.Hash() == config3.Hash() {
 			t.Errorf("Expected different repositories to have different hashes")
 		}
+
+		// Test with CustomCA
+		config4 := &RepositoryConfig{
+			Repository: "repo1",
+			CustomCA: &volsyncv1alpha1.CustomCASpec{
+				SecretName: "ca-secret",
+				Key:        "ca.crt",
+			},
+		}
+
+		config5 := &RepositoryConfig{
+			Repository: "repo1",
+			CustomCA: &volsyncv1alpha1.CustomCASpec{
+				SecretName: "ca-secret",
+				Key:        "ca.crt",
+			},
+		}
+
+		// Same repository with same CA should have same hash
+		if config4.Hash() != config5.Hash() {
+			t.Errorf("Expected identical configs with CA to have same hash")
+		}
+
+		// Same repository with different CA should have different hash
+		if config1.Hash() == config4.Hash() {
+			t.Errorf("Expected different CA configs to have different hashes")
+		}
 	})
 
 	t.Run("SecurityContextAndResourceLimits", func(t *testing.T) {
-		client := fake.NewClientBuilder().WithScheme(scheme).Build()
+		// Create source secret that will be copied
+		sourceSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: "test-namespace",
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"KOPIA_PASSWORD": []byte("test-password"),
+			},
+		}
+
+		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sourceSecret).Build()
 		logger := logr.Discard()
 		manager := NewMaintenanceManager(client, logger, "test-image:latest")
 
@@ -267,9 +397,9 @@ func TestMaintenanceManager(t *testing.T) {
 			t.Fatalf("Failed to reconcile maintenance: %v", err)
 		}
 
-		// Get the created CronJob
+		// Get the created CronJob from operator namespace
 		cronJobList := &batchv1.CronJobList{}
-		err = client.List(context.Background(), cronJobList, ctrlclient.InNamespace("test-namespace"))
+		err = client.List(context.Background(), cronJobList, ctrlclient.InNamespace("test-operator-namespace"))
 		if err != nil {
 			t.Fatalf("Failed to list CronJobs: %v", err)
 		}

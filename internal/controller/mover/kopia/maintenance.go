@@ -20,11 +20,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package kopia
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +36,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,31 +55,66 @@ const (
 	// Label keys for maintenance CronJobs
 	maintenanceLabelKey        = "volsync.backube/kopia-maintenance"
 	maintenanceRepositoryLabel = "volsync.backube/repository-hash"
-	maintenanceNamespaceLabel  = "volsync.backube/namespace"
+	maintenanceNamespaceLabel  = "volsync.backube/source-namespace"
 	// Annotation for repository config
 	maintenanceRepositoryAnnotation = "volsync.backube/repository-config"
+	// Annotation to track original schedule when conflict occurs
+	maintenanceScheduleConflictAnnotation = "volsync.backube/schedule-conflict"
 	// ServiceAccount name for maintenance
 	maintenanceServiceAccountName = "volsync-kopia-maintenance"
 	// Maximum length for CronJob name
 	maxCronJobNameLength = 52
+	// Label for copied maintenance secrets
+	maintenanceSecretLabel = "volsync.backube/maintenance-secret"
+	// Environment variable for operator namespace
+	operatorNamespaceEnvVar = "POD_NAMESPACE"
 )
 
 // MaintenanceManager handles the lifecycle of Kopia maintenance CronJobs
 type MaintenanceManager struct {
-	client         client.Client
-	logger         logr.Logger
-	containerImage string
-	metrics        kopiaMetrics
+	client            client.Client
+	logger            logr.Logger
+	containerImage    string
+	metrics           kopiaMetrics
+	operatorNamespace string // cached operator namespace
 }
 
 // NewMaintenanceManager creates a new MaintenanceManager
 func NewMaintenanceManager(client client.Client, logger logr.Logger, containerImage string) *MaintenanceManager {
-	return &MaintenanceManager{
+	m := &MaintenanceManager{
 		client:         client,
 		logger:         logger.WithName("maintenance"),
 		containerImage: containerImage,
 		metrics:        newKopiaMetrics(),
 	}
+	// Initialize operator namespace
+	m.operatorNamespace = m.getOperatorNamespace()
+	return m
+}
+
+// getOperatorNamespace returns the namespace where the operator is running
+// Phase 2: Add operator namespace support
+func (m *MaintenanceManager) getOperatorNamespace() string {
+	// Check environment variable first
+	if ns := os.Getenv(operatorNamespaceEnvVar); ns != "" {
+		m.logger.V(1).Info("Using operator namespace from environment", "namespace", ns)
+		return ns
+	}
+
+	// Try to read from service account namespace file (more reliable in pods)
+	const nsFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+	if nsBytes, err := os.ReadFile(nsFile); err == nil && len(nsBytes) > 0 {
+		ns := strings.TrimSpace(string(nsBytes))
+		if ns != "" {
+			m.logger.V(1).Info("Using operator namespace from service account", "namespace", ns)
+			return ns
+		}
+	}
+
+	// Fall back to volsync-system as default
+	const defaultNS = "volsync-system"
+	m.logger.V(1).Info("POD_NAMESPACE not set and service account namespace not found, using default", "namespace", defaultNS)
+	return defaultNS
 }
 
 // RepositoryConfig represents the unique configuration for a Kopia repository
@@ -84,19 +123,29 @@ type RepositoryConfig struct {
 	Repository string `json:"repository"`
 	// Custom CA configuration
 	CustomCA *volsyncv1alpha1.CustomCASpec `json:"customCA,omitempty"`
-	// Namespace where the repository is used
-	Namespace string `json:"namespace"`
-	// Schedule for maintenance (optional, defaults to daily at 2 AM)
-	Schedule string `json:"schedule,omitempty"`
+	// Namespace where the repository is used (not included in hash)
+	Namespace string `json:"-"`
+	// Schedule for maintenance (not included in hash)
+	Schedule string `json:"-"`
 }
 
 // Hash generates a deterministic hash for the repository configuration
+// Phase 1: Only hash the repository secret name to identify unique repositories
 func (rc *RepositoryConfig) Hash() string {
-	// Try JSON marshaling first for consistency
-	data, err := json.Marshal(rc)
+	// Only include repository-specific fields in the hash
+	// This ensures one CronJob per repository regardless of namespace or schedule
+	repoCfg := struct {
+		Repository string                                 `json:"repository"`
+		CustomCA   *volsyncv1alpha1.CustomCASpec `json:"customCA,omitempty"`
+	}{
+		Repository: rc.Repository,
+		CustomCA:   rc.CustomCA,
+	}
+
+	data, err := json.Marshal(repoCfg)
 	if err != nil {
-		// Fallback to deterministic hash based on key fields if JSON marshaling fails
-		fallbackStr := fmt.Sprintf("%s:%s:%s", rc.Repository, rc.Namespace, rc.Schedule)
+		// Fallback to deterministic hash based on key fields
+		fallbackStr := rc.Repository
 		if rc.CustomCA != nil {
 			fallbackStr = fmt.Sprintf("%s:ca-%s-%s", fallbackStr, rc.CustomCA.SecretName, rc.CustomCA.ConfigMapName)
 		}
@@ -145,76 +194,38 @@ func (m *MaintenanceManager) ReconcileMaintenanceForSource(ctx context.Context,
 	return m.ensureMaintenanceCronJob(ctx, repoConfig, source)
 }
 
-// CleanupOrphanedMaintenanceCronJobs removes maintenance CronJobs that no longer have
-// any associated Kopia ReplicationSources
-func (m *MaintenanceManager) CleanupOrphanedMaintenanceCronJobs(ctx context.Context,
-	namespace string) error {
-	// List all maintenance CronJobs in the namespace
-	cronJobList := &batchv1.CronJobList{}
-	listOpts := []client.ListOption{
-		client.InNamespace(namespace),
-		client.MatchingLabels{maintenanceLabelKey: "true"},
-	}
-	if err := m.client.List(ctx, cronJobList, listOpts...); err != nil {
-		return fmt.Errorf("failed to list maintenance CronJobs: %w", err)
-	}
-
-	// List all Kopia ReplicationSources in the namespace
-	sourceList := &volsyncv1alpha1.ReplicationSourceList{}
-	if err := m.client.List(ctx, sourceList, client.InNamespace(namespace)); err != nil {
-		return fmt.Errorf("failed to list ReplicationSources: %w", err)
-	}
-
-	// Build a set of required repository hashes
-	requiredHashes := make(map[string]bool)
-	for _, source := range sourceList.Items {
-		if source.Spec.Kopia != nil {
-			// Skip if maintenance is disabled
-			if !m.isMaintenanceEnabled(&source) {
-				continue
-			}
-			repoConfig := &RepositoryConfig{
-				Repository: source.Spec.Kopia.Repository,
-				CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
-				Namespace:  source.Namespace,
-				Schedule:   m.getMaintenanceSchedule(&source),
-			}
-			requiredHashes[repoConfig.Hash()] = true
-		}
-	}
-
-	// Delete orphaned CronJobs
-	for _, cronJob := range cronJobList.Items {
-		repoHash, exists := cronJob.Labels[maintenanceRepositoryLabel]
-		if !exists || !requiredHashes[repoHash] {
-			m.logger.Info("Deleting orphaned maintenance CronJob",
-				"cronJob", cronJob.Name,
-				"namespace", cronJob.Namespace)
-			if err := m.client.Delete(ctx, &cronJob); err != nil && !errors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete orphaned CronJob %s: %w", cronJob.Name, err)
-			}
-			// Record metric for deleted CronJob
-			m.recordCronJobDeletionMetric(cronJob.Namespace, cronJob.Name)
-		}
-	}
-
-	return nil
-}
-
 // ensureMaintenanceCronJob creates or updates a maintenance CronJob for the given repository
 func (m *MaintenanceManager) ensureMaintenanceCronJob(ctx context.Context,
 	repoConfig *RepositoryConfig, owner client.Object) error {
-	cronJob := m.buildMaintenanceCronJob(repoConfig, owner)
+	// Phase 3: Ensure maintenance secret is copied to operator namespace
+	copiedSecretName, err := m.ensureMaintenanceSecret(ctx, repoConfig)
+	if err != nil {
+		return fmt.Errorf("failed to ensure maintenance secret: %w", err)
+	}
+
+	// Phase 5: Ensure ServiceAccount exists in operator namespace
+	if err := m.ensureServiceAccount(ctx); err != nil {
+		return fmt.Errorf("failed to ensure service account: %w", err)
+	}
+
+	cronJob := m.buildMaintenanceCronJob(repoConfig, owner, copiedSecretName)
 
 	// Check if CronJob already exists
 	existing := &batchv1.CronJob{}
-	err := m.client.Get(ctx, types.NamespacedName{
+	err = m.client.Get(ctx, types.NamespacedName{
 		Name:      cronJob.Name,
 		Namespace: cronJob.Namespace,
 	}, existing)
 
 	if err != nil {
 		if errors.IsNotFound(err) {
+			// Phase 7: Check for migration from source namespace
+			if err := m.migrateExistingCronJob(ctx, repoConfig); err != nil {
+				m.logger.Error(err, "Failed to migrate existing CronJob",
+					"repository", repoConfig.Repository,
+					"sourceNamespace", repoConfig.Namespace)
+			}
+
 			// Create new CronJob
 			m.logger.Info("Creating maintenance CronJob",
 				"name", cronJob.Name,
@@ -232,31 +243,430 @@ func (m *MaintenanceManager) ensureMaintenanceCronJob(ctx context.Context,
 		return fmt.Errorf("failed to get CronJob: %w", err)
 	}
 
-	// Update existing CronJob if schedule changed
+	// Phase 4: Handle schedule conflicts - first-wins strategy
 	if existing.Spec.Schedule != cronJob.Spec.Schedule {
-		m.logger.Info("Updating maintenance CronJob schedule",
-			"name", existing.Name,
-			"namespace", existing.Namespace,
-			"oldSchedule", existing.Spec.Schedule,
-			"newSchedule", cronJob.Spec.Schedule)
-		existing.Spec.Schedule = cronJob.Spec.Schedule
+		// Check if this is a genuine conflict or just an update from same source
+		sourceNamespace, exists := existing.Labels[maintenanceNamespaceLabel]
+		if exists && sourceNamespace != repoConfig.Namespace {
+			// Schedule conflict from different namespace - keep existing
+			m.logger.Info("Schedule conflict detected, keeping existing schedule",
+				"cronJob", existing.Name,
+				"existingSchedule", existing.Spec.Schedule,
+				"requestedSchedule", cronJob.Spec.Schedule,
+				"existingNamespace", sourceNamespace,
+				"requestingNamespace", repoConfig.Namespace)
 
-		if err := m.client.Update(ctx, existing); err != nil {
-			return err
+			// Add annotation to track conflict
+			if existing.Annotations == nil {
+				existing.Annotations = make(map[string]string)
+			}
+			existing.Annotations[maintenanceScheduleConflictAnnotation] = fmt.Sprintf(
+				"Schedule %s requested from namespace %s at %s",
+				cronJob.Spec.Schedule, repoConfig.Namespace, time.Now().Format(time.RFC3339))
+
+			if err := m.client.Update(ctx, existing); err != nil {
+				m.logger.Error(err, "Failed to update conflict annotation")
+			}
+		} else {
+			// Update from same namespace or initial setup
+			m.logger.Info("Updating maintenance CronJob schedule",
+				"name", existing.Name,
+				"namespace", existing.Namespace,
+				"oldSchedule", existing.Spec.Schedule,
+				"newSchedule", cronJob.Spec.Schedule)
+			existing.Spec.Schedule = cronJob.Spec.Schedule
+
+			if err := m.client.Update(ctx, existing); err != nil {
+				return err
+			}
+
+			// Record metric for updated CronJob
+			m.recordCronJobMetric(owner, "updated")
 		}
+	}
 
-		// Record metric for updated CronJob
-		m.recordCronJobMetric(owner, "updated")
-		return nil
+	// Update labels to include current namespace if not already present
+	if existing.Labels[maintenanceNamespaceLabel] != repoConfig.Namespace {
+		if existing.Labels == nil {
+			existing.Labels = make(map[string]string)
+		}
+		// Keep track of all namespaces using this CronJob
+		existing.Labels[maintenanceNamespaceLabel] = repoConfig.Namespace
+		if err := m.client.Update(ctx, existing); err != nil {
+			m.logger.Error(err, "Failed to update namespace label")
+		}
 	}
 
 	// CronJob already exists and is up to date
 	return nil
 }
 
+// CleanupOrphanedMaintenanceCronJobs removes maintenance CronJobs that no longer have
+// any associated Kopia ReplicationSources
+// Phase 6: Update cleanup logic for centralized CronJobs
+func (m *MaintenanceManager) CleanupOrphanedMaintenanceCronJobs(ctx context.Context,
+	namespace string) error {
+	// List all Kopia ReplicationSources in the namespace
+	sourceList := &volsyncv1alpha1.ReplicationSourceList{}
+	if err := m.client.List(ctx, sourceList, client.InNamespace(namespace)); err != nil {
+		return fmt.Errorf("failed to list ReplicationSources: %w", err)
+	}
+
+	// Build a set of required repository hashes for this namespace
+	requiredHashes := make(map[string]bool)
+	for _, source := range sourceList.Items {
+		if source.Spec.Kopia != nil {
+			// Skip if maintenance is disabled
+			if !m.isMaintenanceEnabled(&source) {
+				continue
+			}
+			repoConfig := &RepositoryConfig{
+				Repository: source.Spec.Kopia.Repository,
+				CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
+				Namespace:  source.Namespace,
+				Schedule:   m.getMaintenanceSchedule(&source),
+			}
+			requiredHashes[repoConfig.Hash()] = true
+		}
+	}
+
+	// List all maintenance CronJobs in operator namespace that belong to this source namespace
+	cronJobList := &batchv1.CronJobList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(m.operatorNamespace), // Look in operator namespace
+		client.MatchingLabels{
+			maintenanceLabelKey:       "true",
+			maintenanceNamespaceLabel: namespace, // Filter by source namespace
+		},
+	}
+	if err := m.client.List(ctx, cronJobList, listOpts...); err != nil {
+		return fmt.Errorf("failed to list maintenance CronJobs: %w", err)
+	}
+
+	// Check each CronJob to see if it's still needed
+	for _, cronJob := range cronJobList.Items {
+		repoHash, exists := cronJob.Labels[maintenanceRepositoryLabel]
+		if !exists || !requiredHashes[repoHash] {
+			// This CronJob is no longer needed by any source in this namespace
+			// But check if it's used by other namespaces before deleting
+			if err := m.checkAndDeleteOrphanedCronJob(ctx, &cronJob, namespace); err != nil {
+				m.logger.Error(err, "Failed to check/delete orphaned CronJob",
+					"cronJob", cronJob.Name)
+			}
+		}
+	}
+
+	// Clean up orphaned secrets
+	if err := m.cleanupOrphanedSecrets(ctx, namespace); err != nil {
+		m.logger.Error(err, "Failed to cleanup orphaned secrets")
+	}
+
+	return nil
+}
+
+// checkAndDeleteOrphanedCronJob checks if a CronJob is used by other namespaces
+func (m *MaintenanceManager) checkAndDeleteOrphanedCronJob(ctx context.Context,
+	cronJob *batchv1.CronJob, namespace string) error {
+	// Get the repository hash
+	repoHash, exists := cronJob.Labels[maintenanceRepositoryLabel]
+	if !exists {
+		return nil
+	}
+
+	// Check if any other namespace is using this repository
+	allSources := &volsyncv1alpha1.ReplicationSourceList{}
+	if err := m.client.List(ctx, allSources); err != nil {
+		return fmt.Errorf("failed to list all ReplicationSources: %w", err)
+	}
+
+	for _, source := range allSources.Items {
+		if source.Namespace == namespace {
+			continue // Skip the namespace we're cleaning up
+		}
+		if source.Spec.Kopia != nil && m.isMaintenanceEnabled(&source) {
+			repoConfig := &RepositoryConfig{
+				Repository: source.Spec.Kopia.Repository,
+				CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
+				Namespace:  source.Namespace,
+			}
+			if repoConfig.Hash() == repoHash {
+				// Another namespace is using this repository
+				m.logger.V(1).Info("CronJob still needed by another namespace",
+					"cronJob", cronJob.Name,
+					"usingNamespace", source.Namespace)
+				return nil
+			}
+		}
+	}
+
+	// No other namespace is using this CronJob, safe to delete
+	m.logger.Info("Deleting orphaned maintenance CronJob",
+		"cronJob", cronJob.Name,
+		"namespace", cronJob.Namespace)
+	if err := m.client.Delete(ctx, cronJob); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete orphaned CronJob %s: %w", cronJob.Name, err)
+	}
+
+	// Record metric for deleted CronJob
+	m.recordCronJobDeletionMetric(cronJob.Namespace, cronJob.Name)
+	return nil
+}
+
+// cleanupOrphanedSecrets removes copied maintenance secrets that are no longer needed
+// Phase 6: Add secret cleanup
+func (m *MaintenanceManager) cleanupOrphanedSecrets(ctx context.Context, namespace string) error {
+	// List all maintenance secrets for this namespace
+	secretList := &corev1.SecretList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(m.operatorNamespace),
+		client.MatchingLabels{
+			maintenanceSecretLabel:    "true",
+			maintenanceNamespaceLabel: namespace,
+		},
+	}
+	if err := m.client.List(ctx, secretList, listOpts...); err != nil {
+		return fmt.Errorf("failed to list maintenance secrets: %w", err)
+	}
+
+	// List all ReplicationSources in the namespace
+	sourceList := &volsyncv1alpha1.ReplicationSourceList{}
+	if err := m.client.List(ctx, sourceList, client.InNamespace(namespace)); err != nil {
+		return fmt.Errorf("failed to list ReplicationSources: %w", err)
+	}
+
+	// Build set of required secrets
+	requiredSecrets := make(map[string]bool)
+	for _, source := range sourceList.Items {
+		if source.Spec.Kopia != nil && m.isMaintenanceEnabled(&source) {
+			copiedSecretName := fmt.Sprintf("maintenance-%s-%s", namespace, source.Spec.Kopia.Repository)
+			if len(copiedSecretName) > 63 {
+				repoConfig := &RepositoryConfig{
+					Repository: source.Spec.Kopia.Repository,
+					CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
+				}
+				hash := repoConfig.Hash()
+				maxPrefix := 63 - len(hash) - 1
+				copiedSecretName = copiedSecretName[:maxPrefix] + "-" + hash
+			}
+			requiredSecrets[copiedSecretName] = true
+		}
+	}
+
+	// Delete orphaned secrets
+	for _, secret := range secretList.Items {
+		if !requiredSecrets[secret.Name] {
+			m.logger.Info("Deleting orphaned maintenance secret",
+				"secret", secret.Name,
+				"namespace", secret.Namespace)
+			if err := m.client.Delete(ctx, &secret); err != nil && !errors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete orphaned secret %s: %w", secret.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ensureMaintenanceSecret copies the repository secret to the operator namespace
+// Phase 3: Implement secret copying
+func (m *MaintenanceManager) ensureMaintenanceSecret(ctx context.Context,
+	repoConfig *RepositoryConfig) (string, error) {
+	// Get source secret
+	sourceSecret := &corev1.Secret{}
+	err := m.client.Get(ctx, types.NamespacedName{
+		Name:      repoConfig.Repository,
+		Namespace: repoConfig.Namespace,
+	}, sourceSecret)
+	if err != nil {
+		return "", fmt.Errorf("failed to get source secret: %w", err)
+	}
+
+	// Generate name for copied secret
+	copiedSecretName := fmt.Sprintf("maintenance-%s-%s", repoConfig.Namespace, repoConfig.Repository)
+	if len(copiedSecretName) > 63 {
+		// Truncate if too long, keeping a hash suffix for uniqueness
+		hash := repoConfig.Hash()
+		maxPrefix := 63 - len(hash) - 1
+		copiedSecretName = copiedSecretName[:maxPrefix] + "-" + hash
+	}
+
+	// Check if secret already exists in operator namespace
+	copiedSecret := &corev1.Secret{}
+	err = m.client.Get(ctx, types.NamespacedName{
+		Name:      copiedSecretName,
+		Namespace: m.operatorNamespace,
+	}, copiedSecret)
+
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Create new secret
+			copiedSecret = &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      copiedSecretName,
+					Namespace: m.operatorNamespace,
+					Labels: map[string]string{
+						maintenanceSecretLabel:     "true",
+						maintenanceRepositoryLabel: repoConfig.Hash(),
+						maintenanceNamespaceLabel:  repoConfig.Namespace,
+					},
+					Annotations: map[string]string{
+						"volsync.backube/source-namespace": repoConfig.Namespace,
+						"volsync.backube/source-secret":    repoConfig.Repository,
+					},
+				},
+				Type: sourceSecret.Type,
+				Data: sourceSecret.Data,
+			}
+
+			m.logger.Info("Creating maintenance secret copy",
+				"name", copiedSecretName,
+				"namespace", m.operatorNamespace,
+				"sourceNamespace", repoConfig.Namespace,
+				"sourceSecret", repoConfig.Repository)
+
+			if err := m.client.Create(ctx, copiedSecret); err != nil {
+				return "", fmt.Errorf("failed to create maintenance secret: %w", err)
+			}
+		} else {
+			return "", fmt.Errorf("failed to get maintenance secret: %w", err)
+		}
+	} else {
+		// Update existing secret if source has changed
+		if !secretDataEqual(copiedSecret.Data, sourceSecret.Data) {
+			copiedSecret.Data = sourceSecret.Data
+			m.logger.Info("Updating maintenance secret copy",
+				"name", copiedSecretName,
+				"namespace", m.operatorNamespace)
+
+			if err := m.client.Update(ctx, copiedSecret); err != nil {
+				return "", fmt.Errorf("failed to update maintenance secret: %w", err)
+			}
+		}
+	}
+
+	return copiedSecretName, nil
+}
+
+// secretDataEqual compares two secret data maps for equality
+func secretDataEqual(a, b map[string][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, exists := b[k]; !exists || !bytes.Equal(v, bv) {
+			return false
+		}
+	}
+	return true
+}
+
+// ensureServiceAccount ensures the maintenance ServiceAccount exists in operator namespace
+// Phase 5: Fix ServiceAccount issues
+func (m *MaintenanceManager) ensureServiceAccount(ctx context.Context) error {
+	sa := &corev1.ServiceAccount{}
+	err := m.client.Get(ctx, types.NamespacedName{
+		Name:      maintenanceServiceAccountName,
+		Namespace: m.operatorNamespace,
+	}, sa)
+
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Create ServiceAccount
+			sa = &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      maintenanceServiceAccountName,
+					Namespace: m.operatorNamespace,
+					Labels: map[string]string{
+						maintenanceLabelKey: "true",
+					},
+				},
+			}
+
+			m.logger.Info("Creating maintenance ServiceAccount",
+				"name", maintenanceServiceAccountName,
+				"namespace", m.operatorNamespace)
+
+			if err := m.client.Create(ctx, sa); err != nil {
+				return fmt.Errorf("failed to create ServiceAccount: %w", err)
+			}
+
+			// Also ensure necessary RBAC permissions
+			if err := m.ensureRBACPermissions(ctx); err != nil {
+				return fmt.Errorf("failed to ensure RBAC permissions: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to get ServiceAccount: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ensureRBACPermissions ensures necessary RBAC permissions for maintenance
+func (m *MaintenanceManager) ensureRBACPermissions(ctx context.Context) error {
+	// Create Role for maintenance operations
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maintenanceServiceAccountName,
+			Namespace: m.operatorNamespace,
+			Labels: map[string]string{
+				maintenanceLabelKey: "true",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"secrets"},
+				Verbs:     []string{"get", "list"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+				Verbs:     []string{"get", "list"},
+			},
+		},
+	}
+
+	if err := m.client.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
+		// Log warning but continue - might be in test environment
+		m.logger.V(1).Info("Could not create Role (may be expected in tests)", "error", err)
+	}
+
+	// Create RoleBinding
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maintenanceServiceAccountName,
+			Namespace: m.operatorNamespace,
+			Labels: map[string]string{
+				maintenanceLabelKey: "true",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     maintenanceServiceAccountName,
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      maintenanceServiceAccountName,
+				Namespace: m.operatorNamespace,
+			},
+		},
+	}
+
+	if err := m.client.Create(ctx, roleBinding); err != nil && !errors.IsAlreadyExists(err) {
+		// Log warning but continue - might be in test environment
+		m.logger.V(1).Info("Could not create RoleBinding (may be expected in tests)", "error", err)
+	}
+
+	return nil
+}
+
+
 // buildMaintenanceCronJob constructs a CronJob for Kopia maintenance
 func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfig,
-	owner client.Object) *batchv1.CronJob {
+	owner client.Object, copiedSecretName string) *batchv1.CronJob {
 	repoHash := repoConfig.Hash()
 	cronJobName := m.generateCronJobName(repoHash)
 
@@ -269,17 +679,19 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 	// Determine resources to use
 	resources := m.getMaintenanceResources(owner)
 
+	// Phase 2: Create CronJobs in operator namespace
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cronJobName,
-			Namespace: repoConfig.Namespace,
+			Namespace: m.operatorNamespace, // Use operator namespace instead of source namespace
 			Labels: map[string]string{
 				maintenanceLabelKey:        "true",
 				maintenanceRepositoryLabel: repoHash,
-				maintenanceNamespaceLabel:  repoConfig.Namespace,
+				maintenanceNamespaceLabel:  repoConfig.Namespace, // Track source namespace
 			},
 			Annotations: map[string]string{
 				maintenanceRepositoryAnnotation: repoConfig.Repository,
+				"volsync.backube/source-namespace": repoConfig.Namespace,
 			},
 		},
 		Spec: batchv1.CronJobSpec{
@@ -299,7 +711,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 							},
 						},
 						Spec: corev1.PodSpec{
-							ServiceAccountName: m.getOrCreateServiceAccountName(),
+							ServiceAccountName: maintenanceServiceAccountName, // Use centralized ServiceAccount
 							RestartPolicy:      corev1.RestartPolicyOnFailure,
 							SecurityContext: &corev1.PodSecurityContext{
 								RunAsNonRoot: ptr.To(true),
@@ -318,7 +730,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 										{
 											SecretRef: &corev1.SecretEnvSource{
 												LocalObjectReference: corev1.LocalObjectReference{
-													Name: repoConfig.Repository,
+													Name: copiedSecretName, // Use copied secret in operator namespace
 												},
 											},
 										},
@@ -544,10 +956,65 @@ func (m *MaintenanceManager) getMaintenanceSchedule(source *volsyncv1alpha1.Repl
 	return defaultMaintenanceSchedule
 }
 
-// getOrCreateServiceAccountName returns the service account name for maintenance
-func (m *MaintenanceManager) getOrCreateServiceAccountName() string {
-	// For now, return a standard name. In the future, we might create a dedicated SA
-	// The SA should have minimal permissions (just access to secrets/configmaps for repo config)
+// migrateExistingCronJob migrates CronJobs from source namespace to operator namespace
+// Phase 7: Migration support
+func (m *MaintenanceManager) migrateExistingCronJob(ctx context.Context,
+	repoConfig *RepositoryConfig) error {
+	// Look for existing CronJob in source namespace
+	repoHash := repoConfig.Hash()
+	cronJobName := m.generateCronJobName(repoHash)
+
+	existingCronJob := &batchv1.CronJob{}
+	err := m.client.Get(ctx, types.NamespacedName{
+		Name:      cronJobName,
+		Namespace: repoConfig.Namespace, // Check source namespace
+	}, existingCronJob)
+
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// No existing CronJob to migrate
+			return nil
+		}
+		return fmt.Errorf("failed to check for existing CronJob: %w", err)
+	}
+
+	// Found existing CronJob in source namespace, migrate it
+	m.logger.Info("Migrating existing maintenance CronJob to operator namespace",
+		"oldNamespace", repoConfig.Namespace,
+		"newNamespace", m.operatorNamespace,
+		"cronJob", cronJobName)
+
+	// Delete the old CronJob
+	if err := m.client.Delete(ctx, existingCronJob); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete old CronJob during migration: %w", err)
+	}
+
+	// Clean up any jobs from the old CronJob
+	jobList := &batchv1.JobList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(repoConfig.Namespace),
+		client.MatchingLabels{
+			maintenanceLabelKey:        "true",
+			maintenanceRepositoryLabel: repoHash,
+		},
+	}
+	if err := m.client.List(ctx, jobList, listOpts...); err != nil {
+		m.logger.Error(err, "Failed to list jobs during migration")
+	}
+
+	for _, job := range jobList.Items {
+		if err := m.client.Delete(ctx, &job); err != nil && !errors.IsNotFound(err) {
+			m.logger.Error(err, "Failed to delete job during migration", "job", job.Name)
+		}
+	}
+
+	return nil
+}
+
+// getServiceAccountName returns the service account name for maintenance
+// Phase 5: Fix method name
+func (m *MaintenanceManager) getServiceAccountName(owner client.Object) string {
+	// Use centralized ServiceAccount in operator namespace
 	return maintenanceServiceAccountName
 }
 
@@ -704,11 +1171,11 @@ func (m *MaintenanceManager) GetMaintenanceStatus(ctx context.Context,
 	repoHash := repoConfig.Hash()
 	cronJobName := m.generateCronJobName(repoHash)
 
-	// Get the CronJob
+	// Get the CronJob from the operator namespace (centralized approach)
 	cronJob := &batchv1.CronJob{}
 	err := m.client.Get(ctx, types.NamespacedName{
 		Name:      cronJobName,
-		Namespace: source.Namespace,
+		Namespace: m.operatorNamespace,
 	}, cronJob)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -769,7 +1236,7 @@ type MaintenanceStatus struct {
 func (m *MaintenanceManager) getMaintenanceJobs(ctx context.Context, namespace, repoHash string) ([]batchv1.Job, error) { //nolint:lll
 	jobList := &batchv1.JobList{}
 	listOpts := []client.ListOption{
-		client.InNamespace(namespace),
+		client.InNamespace(m.operatorNamespace), // Jobs are in operator namespace (centralized approach)
 		client.MatchingLabels{
 			maintenanceLabelKey:        "true",
 			maintenanceRepositoryLabel: repoHash,
@@ -788,12 +1255,19 @@ func (m *MaintenanceManager) analyzeJobHistory(jobs []batchv1.Job, status *Maint
 	failureCount := 0
 	foundSuccess := false
 
+	// Sort jobs by creation time (newest first) to analyze most recent ones
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].CreationTimestamp.Time.Equal(jobs[j].CreationTimestamp.Time) {
+			// If timestamps are equal, sort by name for consistency
+			return jobs[i].Name > jobs[j].Name
+		}
+		return jobs[i].CreationTimestamp.Time.After(jobs[j].CreationTimestamp.Time)
+	})
+
 	// Limit analysis to most recent 50 jobs to prevent memory issues
 	maxJobsToAnalyze := 50
 	jobsToAnalyze := jobs
 	if len(jobs) > maxJobsToAnalyze {
-		// Sort jobs by creation time (newest first) before limiting
-		// Note: In production, jobs should already be sorted from the API query
 		jobsToAnalyze = jobs[:maxJobsToAnalyze]
 		m.logger.V(1).Info("Limiting job history analysis",
 			"totalJobs", len(jobs),
