@@ -1004,7 +1004,12 @@ function ensure_connected {
     echo ""
 
     # Set client identity after successful connection (for snapshot ownership)
+    log_info "About to set client identity (DIRECTION=${DIRECTION}, KOPIA_OVERRIDE_MAINTENANCE_USERNAME=${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-not set})"
     set_client_identity
+
+    # Verify the client identity was set correctly
+    log_info "Verifying client identity after set-client command..."
+    "${KOPIA[@]}" repository status | grep -E "User|Host" || true
 
     # Set cache directory after successful connection
     log_info "=== Configuring cache directory after connection ==="
@@ -1606,6 +1611,15 @@ function ensure_maintenance_ownership {
 function do_maintenance {
     log_info "=== Starting maintenance operation ==="
     local maint_start_time=$(date +%s)
+
+    # CRITICAL: Set client identity right before maintenance
+    # This ensures we're using the correct identity (maintenance@volsync) when running maintenance
+    log_info "Setting client identity before maintenance..."
+    set_client_identity
+
+    # Verify the identity is set correctly
+    log_info "Current client identity:"
+    "${KOPIA[@]}" repository status | grep -E "Username|Hostname" || true
 
     # Ensure we have maintenance ownership before running maintenance
     ensure_maintenance_ownership
