@@ -56,6 +56,10 @@ log_error() {
     echo "ERROR: $*" >&2
 }
 
+log_warn() {
+    echo "WARN: $*"
+}
+
 log_timing() {
     echo "TIMING: $*"
 }
@@ -219,6 +223,53 @@ echo "=== END DEBUG ==="
 echo ""
 
 KOPIA=("kopia" "--config-file=${KOPIA_CACHE_DIR}/kopia.config" "--log-dir=${KOPIA_CACHE_DIR}/logs" "--log-level=${KOPIA_LOG_LEVEL}" "--file-log-level=${KOPIA_FILE_LOG_LEVEL}" "--log-dir-max-files=${KOPIA_LOG_DIR_MAX_FILES}" "--log-dir-max-age=${KOPIA_LOG_DIR_MAX_AGE}")
+
+# For maintenance mode, use the maintenance username/hostname overrides
+# This ensures maintenance commands run with the correct identity
+if [[ "${DIRECTION}" == "maintenance" ]]; then
+    if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
+        # Parse the maintenance username (format: user@host)
+        # If it contains @, split it into username and hostname
+        if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
+            MAINTENANCE_USER="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME%%@*}"
+            MAINTENANCE_HOST="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME##*@}"
+            log_info "Maintenance mode: Setting username to '${MAINTENANCE_USER}' and hostname to '${MAINTENANCE_HOST}'"
+            KOPIA+=("--override-username=${MAINTENANCE_USER}")
+            KOPIA+=("--override-hostname=${MAINTENANCE_HOST}")
+        else
+            # If no @, use it as username only, with default hostname 'volsync'
+            log_info "Maintenance mode: Setting username to '${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}' and hostname to 'volsync'"
+            KOPIA+=("--override-username=${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}")
+            KOPIA+=("--override-hostname=volsync")
+        fi
+    elif [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+        # Fall back to regular overrides if maintenance-specific ones aren't set
+        if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
+            log_info "Maintenance mode: Using general username override '${KOPIA_OVERRIDE_USERNAME}'"
+            KOPIA+=("--override-username=${KOPIA_OVERRIDE_USERNAME}")
+        fi
+        if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+            log_info "Maintenance mode: Using general hostname override '${KOPIA_OVERRIDE_HOSTNAME}'"
+            KOPIA+=("--override-hostname=${KOPIA_OVERRIDE_HOSTNAME}")
+        fi
+    else
+        # Default maintenance identity
+        log_info "Maintenance mode: Using default maintenance identity 'maintenance@volsync'"
+        KOPIA+=("--override-username=maintenance")
+        KOPIA+=("--override-hostname=volsync")
+    fi
+else
+    # For non-maintenance modes, apply regular username/hostname overrides if set
+    if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
+        log_info "Setting username override: ${KOPIA_OVERRIDE_USERNAME}"
+        KOPIA+=("--override-username=${KOPIA_OVERRIDE_USERNAME}")
+    fi
+    if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+        log_info "Setting hostname override: ${KOPIA_OVERRIDE_HOSTNAME}"
+        KOPIA+=("--override-hostname=${KOPIA_OVERRIDE_HOSTNAME}")
+    fi
+fi
+
 if [[ -n "${CUSTOM_CA}" ]]; then
     echo "Using custom CA certificate at: ${CUSTOM_CA}"
     # Note: Custom CA is now handled via --root-ca-pem-path flag in S3 connect/create commands
@@ -1468,7 +1519,17 @@ function ensure_maintenance_ownership {
     log_info "=== Checking maintenance ownership ==="
 
     # Use dedicated maintenance identity (complete user@host format)
-    local expected_owner="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance@volsync}"
+    local expected_owner
+    if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
+        # If the username doesn't contain @, append @volsync
+        if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
+            expected_owner="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}"
+        else
+            expected_owner="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}@volsync"
+        fi
+    else
+        expected_owner="maintenance@volsync"
+    fi
 
     # Check current maintenance owner
     log_info "Checking current maintenance owner..."
@@ -1906,7 +1967,18 @@ elif [[ "${DIRECTION}" == "destination" ]]; then
 elif [[ "${DIRECTION}" == "maintenance" ]]; then
     log_info "=== Running MAINTENANCE ONLY ===="
     log_info "Maintenance mode: Dedicated maintenance operation"
-    log_info "Maintenance Identity: ${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance@volsync}"
+    # Show the complete maintenance identity
+    local maintenance_identity
+    if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
+        if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
+            maintenance_identity="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}"
+        else
+            maintenance_identity="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}@volsync"
+        fi
+    else
+        maintenance_identity="maintenance@volsync"
+    fi
+    log_info "Maintenance Identity: ${maintenance_identity}"
 
     # For maintenance mode, skip data directory checks
     log_info "Skipping data directory validation (not needed for maintenance)"
