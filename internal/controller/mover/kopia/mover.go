@@ -132,7 +132,6 @@ type Mover struct {
 	hostname string
 	// Source-only fields
 	sourcePathOverride  *string
-	maintenanceInterval *int32
 	retainPolicy        *volsyncv1alpha1.KopiaRetainPolicy
 	compression         string
 	parallelism         *int32
@@ -1376,14 +1375,6 @@ func (m *Mover) handleJobStatus(ctx context.Context, job *batchv1.Job,
 
 	logger.Info("job completed")
 
-	if m.isSource {
-		if m.shouldRunMaintenance() {
-			now := metav1.Now()
-			m.sourceStatus.LastMaintenance = &now
-			logger.Info("maintenance completed", ".Status.Kopia.LastMaintenance", m.sourceStatus.LastMaintenance)
-		}
-	}
-
 	// update status with mover logs from successful job
 	// Use Kopia-specific filter for better log extraction
 	logFilter := utils.AllLines
@@ -1509,20 +1500,6 @@ func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 	return mover.Complete(), nil
 }
 
-func (m *Mover) shouldRunMaintenance() bool {
-	if m.maintenanceInterval == nil || *m.maintenanceInterval <= 0 {
-		return false
-	}
-
-	if m.sourceStatus == nil || m.sourceStatus.LastMaintenance == nil {
-		return true
-	}
-
-	lastMaintenance := m.sourceStatus.LastMaintenance.Time
-	nextMaintenance := lastMaintenance.Add(time.Duration(*m.maintenanceInterval) * 24 * time.Hour)
-
-	return time.Now().After(nextMaintenance)
-}
 
 // recordOperationSuccess records metrics for successful operations
 func (m *Mover) recordOperationSuccess(operation string, duration time.Duration) {

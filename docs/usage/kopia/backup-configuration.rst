@@ -1475,9 +1475,6 @@ A production-ready configuration using external policy files for comprehensive b
        # Performance tuning
        parallelism: 8
        cacheCapacity: 5Gi
-       
-       # Maintenance schedule
-       maintenanceIntervalDays: 1
 
 **Example 2: Multi-Tier Application with Structured Config**
 
@@ -1741,7 +1738,42 @@ Complete disaster recovery setup with all policy features:
        sourcePath: "/data"
        parallelism: 16
        cacheCapacity: 20Gi
-       maintenanceIntervalDays: 1
+
+Maintenance Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Repository maintenance is now handled exclusively through the KopiaMaintenance CRD. The ``maintenanceIntervalDays``
+field has been removed from ReplicationSource.
+
+**Creating KopiaMaintenance for your backups:**
+
+.. code-block:: yaml
+
+   ---
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: production-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: kopia-config  # Same secret as ReplicationSource
+     trigger:
+       schedule: "0 2 * * *"     # Daily at 2 AM
+     # Cache configuration for better performance
+     cacheCapacity: 10Gi
+     cacheStorageClassName: fast-ssd
+     cacheAccessModes:
+       - ReadWriteOnce
+
+**Key benefits of using KopiaMaintenance CRD:**
+
+- **Decoupled maintenance**: Maintenance runs independently from backup operations
+- **Flexible triggers**: Support for both scheduled and manual maintenance
+- **Performance optimization**: Dedicated cache configuration for maintenance operations
+- **Better resource management**: Control CPU and memory allocation for maintenance jobs
+
+See :doc:`kopiamaintenance` for complete configuration options and migration guide.
 
 Validation and Testing
 ~~~~~~~~~~~~~~~~~~~~~~

@@ -107,14 +107,22 @@ schedule, and backup options.
 
 See :doc:`backup-configuration` for backup setup and configuration options.
 
-**3. Configure Maintenance (Optional)**
+**3. Configure Maintenance (Recommended)**
 
-VolSync automatically handles repository maintenance through dedicated CronJobs.
-This provides better resource management and flexible scheduling compared to the
-legacy maintenanceIntervalDays approach.
+VolSync provides the KopiaMaintenance CRD for managing repository maintenance operations.
+This namespace-scoped resource offers flexible triggering options and performance optimization
+through cache support.
 
-See :doc:`maintenance-cronjobs` for maintenance CronJob configuration, migration
-from maintenanceIntervalDays, and troubleshooting.
+**Important Changes:**
+
+- **maintenanceIntervalDays Removed**: The ``maintenanceIntervalDays`` field has been deprecated and removed from ReplicationSource
+- **Use KopiaMaintenance CRD**: All maintenance operations should now be configured through the dedicated KopiaMaintenance CRD
+- **Flexible Triggers**: Choose between scheduled (cron) or manual (on-demand) maintenance
+- **Cache Support**: Configure persistent cache for improved performance with multiple options
+- **Migration Support**: Seamless migration from deprecated ``schedule`` field to ``trigger.schedule``
+
+See :doc:`kopiamaintenance` for the KopiaMaintenance CRD reference, trigger configuration,
+cache setup, and migration guides.
 
 **4. Set up Restore Operations**
 
@@ -309,16 +317,17 @@ The Kopia documentation has been organized into focused sections for easier navi
    environment cloning, namespace migration, and testing procedures with detailed examples,
    security considerations, and troubleshooting steps.
 
-:doc:`maintenance-cronjobs`
-   Complete guide to the new maintenance CronJob feature that provides decoupled, scalable
-   repository maintenance operations. Covers configuration, migration from maintenanceIntervalDays,
-   repository deduplication, monitoring, and troubleshooting.
+:doc:`kopiamaintenance`
+   Complete reference for the KopiaMaintenance Custom Resource Definition (CRD), a namespace-scoped
+   resource for managing Kopia repository maintenance. Features comprehensive coverage of trigger
+   support (scheduled and manual), cache configuration for performance optimization (including cachePVC,
+   cacheCapacity, cacheStorageClassName, and cacheAccessModes), migration from deprecated fields
+   (including maintenanceIntervalDays), best practices, troubleshooting, and performance tuning.
 
 :doc:`kopia-maintenance-crd`
-   Comprehensive reference for the KopiaMaintenance Custom Resource Definition (CRD), a cluster-scoped
-   resource that provides centralized, flexible management of Kopia repository maintenance operations.
-   Covers repository selector mode, direct repository mode, advanced matching criteria, priority-based
-   conflict resolution, migration guide, best practices, and complete API reference.
+   Additional documentation covering advanced KopiaMaintenance topics including cluster-scoped
+   management patterns, repository selector modes, and priority-based conflict resolution for
+   complex multi-repository environments.
 
 :doc:`troubleshooting`
    Comprehensive troubleshooting guide covering enhanced error reporting, snapshot discovery,

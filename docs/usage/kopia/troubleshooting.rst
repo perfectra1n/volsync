@@ -1181,17 +1181,23 @@ Retention Policy Not Working
    Retention policies are enforced during maintenance operations.
    
    .. code-block:: bash
-   
+
       # Check when maintenance last ran
-      kubectl get replicationsource <name> -o jsonpath='{.status.kopia.lastMaintenance}'
-   
-   **Solution**: Ensure ``maintenanceIntervalDays`` is set appropriately:
-   
+      kubectl get kopiamaintenance <name> -o jsonpath='{.status.lastMaintenanceTime}'
+
+   **Solution**: Ensure KopiaMaintenance CRD is configured:
+
    .. code-block:: yaml
-   
+
+      apiVersion: volsync.backube/v1alpha1
+      kind: KopiaMaintenance
+      metadata:
+        name: my-maintenance
       spec:
-        kopia:
-          maintenanceIntervalDays: 7  # Run weekly
+        repository:
+          repository: kopia-config
+        trigger:
+          schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
 
 2. **Policy Not Applied**
    
@@ -1225,6 +1231,86 @@ Retention Policy Not Working
       kubectl get replicationsource <name> -o jsonpath='{.spec.kopia.policyConfig}'
    
    **Solution**: Either use inline OR external policies, not both.
+
+KopiaMaintenance Issues
+-----------------------
+
+**Problem**: Maintenance not running after migrating from maintenanceIntervalDays
+
+Since ``maintenanceIntervalDays`` has been removed from ReplicationSource, you must now use
+the KopiaMaintenance CRD for repository maintenance.
+
+**Migration Steps**:
+
+1. **Create KopiaMaintenance resource**:
+
+   .. code-block:: yaml
+
+      apiVersion: volsync.backube/v1alpha1
+      kind: KopiaMaintenance
+      metadata:
+        name: my-maintenance
+        namespace: my-namespace
+      spec:
+        repository:
+          repository: kopia-config  # Same as your ReplicationSource
+        trigger:
+          schedule: "0 2 * * *"     # Daily at 2 AM
+        # Optional: Add cache for better performance
+        cacheCapacity: 10Gi
+        cacheStorageClassName: fast-ssd
+
+2. **Verify maintenance is running**:
+
+   .. code-block:: bash
+
+      # Check KopiaMaintenance status
+      kubectl get kopiamaintenance -n my-namespace
+
+      # Check CronJob creation
+      kubectl get cronjobs -n my-namespace -l volsync.backube/kopia-maintenance=true
+
+      # Check maintenance job logs
+      kubectl logs -n my-namespace job/<maintenance-job-name>
+
+**Common KopiaMaintenance Problems**:
+
+1. **Cache PVC Issues**:
+
+   .. code-block:: bash
+
+      # Check cache PVC status
+      kubectl get pvc -n my-namespace | grep cache
+
+      # If cache PVC is stuck in Pending
+      kubectl describe pvc <cache-pvc-name> -n my-namespace
+
+   **Solution**: Verify storage class exists and has available capacity
+
+2. **Manual Trigger Not Working**:
+
+   .. code-block:: yaml
+
+      spec:
+        trigger:
+          manual: "trigger-now"  # Update this value to trigger
+
+   .. code-block:: bash
+
+      # Check if manual trigger is recognized
+      kubectl get kopiamaintenance <name> -n <namespace> \
+        -o jsonpath='{.spec.trigger.manual} -> {.status.lastManualSync}'
+
+3. **Maintenance Job Failures**:
+
+   .. code-block:: bash
+
+      # Check recent job failures
+      kubectl get jobs -n <namespace> -l volsync.backube/kopia-maintenance=true \
+        --sort-by=.metadata.creationTimestamp | tail -5
+
+      # View error logs
+      kubectl logs -n <namespace> job/<failed-job-name>
 
 Compression Issues
 ------------------
@@ -1754,7 +1840,8 @@ Best Practices for Logging in Kubernetes
 
       spec:
         kopia:
-          maintenanceIntervalDays: 7  # Weekly maintenance
+          # Note: maintenanceIntervalDays has been removed
+          # Use KopiaMaintenance CRD for maintenance configuration
 
 Common Scenarios and Recommendations
 -------------------------------------

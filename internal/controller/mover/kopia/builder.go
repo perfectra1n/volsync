@@ -206,7 +206,6 @@ func (kb *Builder) createSourceMover(client client.Client, logger logr.Logger,
 		username:              username,
 		hostname:              hostname,
 		sourcePathOverride:    source.Spec.Kopia.SourcePathOverride,
-		maintenanceInterval:   nil, // Deprecated - use KopiaMaintenance CRD
 		retainPolicy:          source.Spec.Kopia.Retain,
 		compression:           source.Spec.Kopia.Compression,
 		parallelism:           source.Spec.Kopia.Parallelism,

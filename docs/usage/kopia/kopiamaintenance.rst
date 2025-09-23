@@ -68,7 +68,10 @@ Basic Structure
        customCA:  # Optional
          configMapName: <ca-configmap-name>
          key: <ca-cert-key>
-     schedule: "0 2 * * *"
+     trigger:  # New trigger support
+       schedule: "0 2 * * *"  # Scheduled trigger
+       # OR
+       manual: "trigger-1"    # Manual trigger
      enabled: true
      suspend: false
      successfulJobsHistoryLimit: 3
@@ -80,6 +83,13 @@ Basic Structure
        limits:
          memory: "1Gi"
          cpu: "500m"
+     # Cache configuration (new)
+     cacheCapacity: 10Gi
+     cacheStorageClassName: fast-ssd
+     cacheAccessModes:
+       - ReadWriteOnce
+     # OR use existing PVC
+     cachePVC: existing-cache-pvc
 
 Field Reference
 ---------------
@@ -105,9 +115,17 @@ Optional Fields
    - **key**: Key within ConfigMap containing the certificate (default: "ca.crt")
    - **secretName**: Alternative to ConfigMap, name of Secret containing CA certificate
 
-**schedule** (*string*, optional)
+**trigger** (*KopiaMaintenanceTriggerSpec*, optional)
+   Defines when maintenance will be performed. Supports scheduled and manual triggers.
+
+   - **schedule**: Cron schedule for maintenance execution (mutually exclusive with manual)
+   - **manual**: String value for manual trigger (mutually exclusive with schedule)
+   - Default: If no trigger specified, defaults to ``schedule: "0 2 * * *"``
+
+**schedule** (*string*, optional, deprecated)
    Cron schedule for maintenance execution.
 
+   - **DEPRECATED**: Use ``trigger.schedule`` instead. This field will be removed in a future version.
    - Default: ``"0 2 * * *"`` (daily at 2 AM)
    - Supports standard cron expressions and aliases (``@daily``, ``@weekly``, ``@monthly``)
 
@@ -154,6 +172,22 @@ Optional Fields
    Pod affinity rules for maintenance jobs.
    Supports nodeAffinity, podAffinity, and podAntiAffinity.
 
+**cacheCapacity** (*Quantity*, optional)
+   Size of the Kopia metadata cache volume.
+   If specified without cachePVC, a new PVC will be created.
+
+**cacheStorageClassName** (*string*, optional)
+   StorageClass for the Kopia metadata cache volume.
+   Only used when creating a new cache PVC.
+
+**cacheAccessModes** (*[]PersistentVolumeAccessMode*, optional)
+   Access modes for the Kopia metadata cache volume.
+   Default: ``[ReadWriteOnce]``
+
+**cachePVC** (*string*, optional)
+   Name of an existing PVC to use for Kopia cache.
+   If specified, other cache configuration fields are ignored.
+
 Status Fields
 ^^^^^^^^^^^^^
 
@@ -175,6 +209,10 @@ The KopiaMaintenance controller updates these status fields:
 **maintenanceFailures** (*integer*)
    Count of consecutive maintenance failures.
 
+**lastManualSync** (*string*)
+   Set to the last spec.trigger.manual value when manual maintenance completes.
+   Used to track completion of manual triggers.
+
 **conditions** (*[]Condition*)
    Current state observations of the maintenance configuration.
    Common conditions: Ready, Reconciling, Error.
@@ -182,8 +220,50 @@ The KopiaMaintenance controller updates these status fields:
 Configuration Examples
 ======================
 
-Basic Daily Maintenance
------------------------
+Trigger Configuration
+--------------------
+
+Scheduled Trigger (Recommended)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: scheduled-maintenance
+     namespace: my-app
+   spec:
+     repository:
+       repository: kopia-repository-secret
+     trigger:
+       schedule: "0 3 * * *"  # 3 AM daily
+     enabled: true
+
+Manual Trigger for On-Demand Maintenance
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: manual-maintenance
+     namespace: my-app
+   spec:
+     repository:
+       repository: kopia-repository-secret
+     trigger:
+       manual: "run-maintenance-2024-01-15"  # Change this value to trigger
+     enabled: true
+
+   # To trigger maintenance:
+   # 1. Update spec.trigger.manual to a new value
+   # 2. Wait for status.lastManualSync to match the new value
+   # 3. Maintenance has completed when values match
+
+Basic Daily Maintenance (Legacy)
+--------------------------------
 
 .. code-block:: yaml
 
@@ -195,7 +275,7 @@ Basic Daily Maintenance
    spec:
      repository:
        repository: kopia-repository-secret
-     schedule: "0 3 * * *"  # 3 AM daily
+     schedule: "0 3 * * *"  # 3 AM daily (deprecated field)
      enabled: true
 
 Weekly Maintenance with Resource Limits
@@ -243,8 +323,8 @@ Maintenance with Custom CA
        environment: production
        team: platform
 
-High-Performance Maintenance
------------------------------
+High-Performance Maintenance with Cache
+----------------------------------------
 
 .. code-block:: yaml
 
@@ -256,7 +336,8 @@ High-Performance Maintenance
    spec:
      repository:
        repository: warehouse-backup-config
-     schedule: "0 0 * * 6"  # Midnight on Saturdays
+     trigger:
+       schedule: "0 0 * * 6"  # Midnight on Saturdays
      resources:
        requests:
          memory: "2Gi"
@@ -264,6 +345,11 @@ High-Performance Maintenance
        limits:
          memory: "8Gi"
          cpu: "4"
+     # Cache configuration for better performance
+     cacheCapacity: 20Gi
+     cacheStorageClassName: fast-ssd
+     cacheAccessModes:
+       - ReadWriteOnce
      affinity:
        nodeAffinity:
          requiredDuringSchedulingIgnoredDuringExecution:
@@ -272,6 +358,63 @@ High-Performance Maintenance
              - key: node-type
                operator: In
                values: ["high-memory"]
+
+Cache Configuration Examples
+----------------------------
+
+Using Existing Cache PVC
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: maintenance-with-existing-cache
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     cachePVC: shared-kopia-cache  # Use existing PVC
+
+Creating New Cache PVC
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: maintenance-with-new-cache
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     cacheCapacity: 15Gi            # Create new PVC with this size
+     cacheStorageClassName: fast    # Use this storage class
+     cacheAccessModes:
+       - ReadWriteOnce
+
+No Cache (EmptyDir Fallback)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: maintenance-no-cache
+     namespace: testing
+   spec:
+     repository:
+       repository: test-backup-config
+     trigger:
+       schedule: "0 4 * * *"
+     # No cache configuration - will use EmptyDir
 
 Temporarily Suspended Maintenance
 ----------------------------------
@@ -286,13 +429,96 @@ Temporarily Suspended Maintenance
    spec:
      repository:
        repository: test-backup-config
-     schedule: "0 4 * * *"
+     trigger:
+       schedule: "0 4 * * *"
      enabled: true
      suspend: true  # Temporarily suspended
      successfulJobsHistoryLimit: 10  # Keep more history during suspension
 
 Best Practices
 ==============
+
+Trigger Selection
+----------------
+
+**Scheduled Triggers**
+
+Use scheduled triggers for:
+
+- Regular, predictable maintenance windows
+- Production environments with consistent backup patterns
+- Repositories that grow at a steady rate
+
+Example schedules:
+
+- ``"0 2 * * *"`` - Daily at 2 AM
+- ``"0 3 * * 0"`` - Weekly on Sunday at 3 AM
+- ``"0 4 1 * *"`` - Monthly on the 1st at 4 AM
+- ``"@daily"`` - Once per day at midnight
+- ``"@weekly"`` - Once per week on Sunday at midnight
+
+**Manual Triggers**
+
+Use manual triggers for:
+
+- On-demand maintenance after large data changes
+- Testing and troubleshooting
+- Maintenance coordination with other operations
+- CI/CD pipeline integration
+
+To use manual triggers:
+
+1. Set ``spec.trigger.manual`` to a unique value
+2. Apply the resource
+3. Monitor ``status.lastManualSync``
+4. When ``lastManualSync`` matches your trigger value, maintenance is complete
+5. Update ``spec.trigger.manual`` to a new value for next trigger
+
+Cache Configuration
+-------------------
+
+Kopia uses a metadata cache to improve performance. KopiaMaintenance supports four cache scenarios:
+
+**1. Existing PVC (Recommended for Production)**
+
+Best when you want full control over the cache PVC:
+
+.. code-block:: yaml
+
+   spec:
+     cachePVC: my-cache-pvc  # Must exist in same namespace
+
+**2. Auto-Created PVC**
+
+Best for automatic cache management:
+
+.. code-block:: yaml
+
+   spec:
+     cacheCapacity: 10Gi
+     cacheStorageClassName: fast-ssd
+     cacheAccessModes:
+       - ReadWriteOnce
+
+**3. EmptyDir (Default)**
+
+When no cache configuration is provided, uses ephemeral storage.
+Suitable for:
+
+- Small repositories
+- Testing environments
+- When persistence isn't critical
+
+**4. No Cache**
+
+Kopia will operate without cache if explicitly disabled in repository configuration.
+
+**Cache Sizing Guidelines:**
+
+- Small repos (<100GB): 1-2Gi cache
+- Medium repos (100GB-1TB): 5-10Gi cache
+- Large repos (>1TB): 15-30Gi cache
+- Very large repos: 50Gi+ cache
 
 Repository Secret Management
 ----------------------------
@@ -317,6 +543,28 @@ Resource Allocation
 3. **Scale for repository size**: Larger repositories require more memory and CPU
 4. **Use node affinity**: Direct maintenance to appropriate nodes for large-scale operations
 
+**Resource Recommendations by Repository Size:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Repository Size
+     - Memory (Request/Limit)
+     - CPU (Request/Limit)
+   * - Small (<100GB)
+     - 256Mi / 1Gi
+     - 100m / 500m
+   * - Medium (100GB-1TB)
+     - 512Mi / 2Gi
+     - 200m / 1
+   * - Large (1TB-10TB)
+     - 1Gi / 4Gi
+     - 500m / 2
+   * - Very Large (>10TB)
+     - 2Gi / 8Gi
+     - 1 / 4
+
 Maintenance Ownership
 ---------------------
 
@@ -336,6 +584,94 @@ Naming Conventions
 
 Migration Guide
 ===============
+
+Migrating from maintenanceIntervalDays
+---------------------------------------
+
+The ``maintenanceIntervalDays`` field has been removed from ReplicationSource. All maintenance
+operations must now be configured through the KopiaMaintenance CRD.
+
+**Old Configuration (No Longer Supported):**
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: ReplicationSource
+   metadata:
+     name: my-backup
+   spec:
+     sourcePVC: my-data
+     kopia:
+       repository: kopia-config
+       maintenanceIntervalDays: 7  # REMOVED - NO LONGER SUPPORTED
+
+**New Configuration (Required):**
+
+Create a separate KopiaMaintenance resource:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: my-maintenance
+     namespace: same-as-replicationsource
+   spec:
+     repository:
+       repository: kopia-config  # Same secret as ReplicationSource
+     trigger:
+       schedule: "0 2 * * 0"      # Weekly on Sunday at 2 AM
+     # Optional: Add cache for better performance
+     cacheCapacity: 10Gi
+     cacheStorageClassName: fast-ssd
+     cacheAccessModes:
+       - ReadWriteOnce
+
+**Migration Benefits:**
+
+- **Independent scheduling**: Maintenance no longer tied to backup frequency
+- **Better performance**: Dedicated cache configuration for maintenance
+- **Resource control**: Specify CPU/memory limits for maintenance jobs
+- **Flexible triggers**: Support for both scheduled and manual maintenance
+
+Migrating from Deprecated schedule Field
+----------------------------------------
+
+The ``schedule`` field is deprecated in favor of ``trigger.schedule``. Here's how to migrate:
+
+**Old Configuration:**
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: my-maintenance
+   spec:
+     repository:
+       repository: backup-config
+     schedule: "0 2 * * *"  # Deprecated field
+
+**New Configuration:**
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: my-maintenance
+   spec:
+     repository:
+       repository: backup-config
+     trigger:
+       schedule: "0 2 * * *"  # New field location
+
+**Backward Compatibility:**
+
+- The deprecated ``schedule`` field continues to work
+- If both fields are set, ``trigger.schedule`` takes precedence
+- The controller will log warnings when using the deprecated field
+- Plan to migrate before the field is removed in a future version
 
 From Embedded maintenanceCronJob
 ---------------------------------
@@ -403,11 +739,256 @@ Migration Steps
 3. **Remove embedded configuration** from ReplicationSources
 4. **Monitor maintenance execution** to ensure continuity
 
+Adding Cache to Existing Maintenance
+------------------------------------
+
+To add cache support to existing maintenance configurations:
+
+**Step 1: Create a cache PVC (if not using auto-creation)**
+
+.. code-block:: yaml
+
+   apiVersion: v1
+   kind: PersistentVolumeClaim
+   metadata:
+     name: kopia-cache
+     namespace: production
+   spec:
+     accessModes:
+       - ReadWriteOnce
+     storageClassName: fast-ssd
+     resources:
+       requests:
+         storage: 10Gi
+
+**Step 2: Update KopiaMaintenance to use cache**
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: prod-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     cachePVC: kopia-cache  # Add this line
+
+**Step 3: Monitor performance improvement**
+
+.. code-block:: bash
+
+   # Check maintenance job duration before and after cache
+   kubectl get jobs -n production -l volsync.backube/kopia-maintenance=true \
+     -o custom-columns=NAME:.metadata.name,DURATION:.status.completionTime
+
+Advanced Usage
+==============
+
+Combining Manual and Scheduled Triggers
+----------------------------------------
+
+While you cannot use both triggers simultaneously in a single resource, you can create separate resources for different trigger types:
+
+.. code-block:: yaml
+
+   # Regular scheduled maintenance
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: scheduled-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       schedule: "0 2 * * *"
+   ---
+   # On-demand maintenance for the same repository
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: manual-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       manual: "on-demand-1"
+     enabled: false  # Enable only when needed
+
+Automating Manual Triggers
+---------------------------
+
+You can automate manual triggers using kubectl or CI/CD pipelines:
+
+.. code-block:: bash
+
+   #!/bin/bash
+   # Script to trigger manual maintenance
+
+   NAMESPACE="production"
+   MAINTENANCE_NAME="manual-maintenance"
+   TRIGGER_VALUE="manual-$(date +%Y%m%d-%H%M%S)"
+
+   # Update the trigger
+   kubectl patch kopiamaintenance $MAINTENANCE_NAME -n $NAMESPACE \
+     --type merge -p '{"spec":{"trigger":{"manual":"'$TRIGGER_VALUE'"}}}'
+
+   # Wait for completion
+   while true; do
+     LAST_SYNC=$(kubectl get kopiamaintenance $MAINTENANCE_NAME -n $NAMESPACE \
+       -o jsonpath='{.status.lastManualSync}')
+     if [ "$LAST_SYNC" == "$TRIGGER_VALUE" ]; then
+       echo "Maintenance completed"
+       break
+     fi
+     echo "Waiting for maintenance to complete..."
+     sleep 30
+   done
+
+Performance Tuning with Cache
+------------------------------
+
+**Cache Warming Strategy:**
+
+For optimal performance, pre-warm the cache before heavy maintenance:
+
+.. code-block:: yaml
+
+   apiVersion: batch/v1
+   kind: Job
+   metadata:
+     name: cache-warmer
+     namespace: production
+   spec:
+     template:
+       spec:
+         containers:
+         - name: kopia
+           image: kopia/kopia:latest
+           command:
+           - kopia
+           - repository
+           - status
+           - --config-file=/tmp/repository/config
+           volumeMounts:
+           - name: cache
+             mountPath: /cache
+           - name: repository-config
+             mountPath: /tmp/repository
+         volumes:
+         - name: cache
+           persistentVolumeClaim:
+             claimName: kopia-cache
+         - name: repository-config
+           secret:
+             secretName: prod-backup-config
+
 Troubleshooting
 ===============
 
 Common Issues
 -------------
+
+Trigger-Related Issues
+^^^^^^^^^^^^^^^^^^^^^^
+
+**Manual Trigger Not Working:**
+
+*Symptoms:*
+
+- ``status.lastManualSync`` doesn't update
+- No maintenance job created
+
+*Solutions:*
+
+1. Verify trigger value changed:
+
+   .. code-block:: bash
+
+      kubectl get kopiamaintenance <name> -n <namespace> \
+        -o jsonpath='{.spec.trigger.manual}'
+
+2. Check for conflicting triggers:
+
+   .. code-block:: bash
+
+      kubectl get kopiamaintenance <name> -n <namespace> \
+        -o jsonpath='{.spec.trigger}'
+
+3. Ensure not using both manual and schedule triggers
+
+**Schedule Trigger Using Deprecated Field:**
+
+*Symptoms:*
+
+- Controller warnings about deprecated field usage
+- Unexpected scheduling behavior
+
+*Solutions:*
+
+1. Migrate to new trigger format:
+
+   .. code-block:: bash
+
+      kubectl patch kopiamaintenance <name> -n <namespace> --type=json \
+        -p='[{"op": "remove", "path": "/spec/schedule"},
+             {"op": "add", "path": "/spec/trigger",
+              "value": {"schedule": "0 2 * * *"}}]'
+
+Cache-Related Issues
+^^^^^^^^^^^^^^^^^^^^
+
+**Cache PVC Not Found:**
+
+*Symptoms:*
+
+- Maintenance jobs fail with volume mount errors
+- Events show PVC binding failures
+
+*Solutions:*
+
+1. Verify PVC exists:
+
+   .. code-block:: bash
+
+      kubectl get pvc <cache-pvc-name> -n <namespace>
+
+2. Check PVC is bound:
+
+   .. code-block:: bash
+
+      kubectl get pvc <cache-pvc-name> -n <namespace> -o jsonpath='{.status.phase}'
+
+3. Ensure PVC access modes match job requirements
+
+**Cache Performance Issues:**
+
+*Symptoms:*
+
+- Slow maintenance despite cache
+- Cache PVC filling up
+
+*Solutions:*
+
+1. Check cache usage:
+
+   .. code-block:: bash
+
+      kubectl exec -n <namespace> <maintenance-pod> -- df -h /cache
+
+2. Increase cache size if needed
+3. Use faster storage class
+4. Clear cache if corrupted:
+
+   .. code-block:: bash
+
+      kubectl delete pvc <cache-pvc> -n <namespace>
+      # Recreate with larger size
 
 Maintenance Not Running
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -504,17 +1085,31 @@ Debugging Commands
    # Check KopiaMaintenance resources
    kubectl get kopiamaintenance -A
 
-   # View detailed status
-   kubectl describe kopiamaintenance <name> -n <namespace>
+   # View detailed status with trigger info
+   kubectl get kopiamaintenance <name> -n <namespace> -o yaml | grep -A5 trigger
 
-   # Check created CronJobs
+   # Check trigger status
+   kubectl get kopiamaintenance <name> -n <namespace> \
+     -o jsonpath='{.spec.trigger.manual} -> {.status.lastManualSync}\n'
+
+   # View cache configuration
+   kubectl get kopiamaintenance <name> -n <namespace> \
+     -o jsonpath='{.spec.cache*}'
+
+   # Check created CronJobs (for scheduled triggers)
    kubectl get cronjobs -n <namespace> -l volsync.backube/kopia-maintenance=true
+
+   # Check Jobs (for manual triggers)
+   kubectl get jobs -n <namespace> -l volsync.backube/kopia-maintenance=true
 
    # View maintenance job logs
    kubectl logs -n <namespace> job/<maintenance-job-name>
 
    # Check events for errors
    kubectl get events -n <namespace> --field-selector involvedObject.name=<maintenance-name>
+
+   # Monitor cache PVC usage
+   kubectl exec -n <namespace> <pod-name> -- df -h /cache
 
 Limitations
 ===========
@@ -537,13 +1132,174 @@ The simplified design provides:
 - **Simpler RBAC**: Namespace-level permissions are easier to manage
 - **Predictable behavior**: Direct configuration eliminates matching complexity
 
+Performance Considerations
+==========================
+
+Cache Impact on Performance
+---------------------------
+
+The Kopia cache significantly improves maintenance performance:
+
+**Performance Comparison:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Repository Size
+     - Without Cache
+     - With Cache
+   * - 100GB
+     - 15-20 minutes
+     - 5-8 minutes
+   * - 1TB
+     - 2-3 hours
+     - 30-45 minutes
+   * - 10TB
+     - 8-12 hours
+     - 2-3 hours
+
+**Cache Optimization Tips:**
+
+1. **Use SSD storage** for cache PVCs when possible
+2. **Size appropriately**: 1-2% of repository size is usually sufficient
+3. **Monitor cache hit rates** through Kopia logs
+4. **Persistent cache** is crucial for large repositories
+5. **Share cache** between maintenance and backup operations when possible
+
+Scheduling Optimization
+-----------------------
+
+**Best Practices for Scheduling:**
+
+1. **Avoid backup windows**: Don't run maintenance during active backups
+2. **Stagger maintenance**: Spread maintenance across different times for multiple repositories
+3. **Consider time zones**: Schedule based on application usage patterns
+4. **Frequency guidelines**:
+
+   - Daily: Small, frequently changing repositories
+   - Weekly: Medium-sized, moderate change rate
+   - Monthly: Large, slow-changing archives
+
+**Example Staggered Schedule:**
+
+.. code-block:: yaml
+
+   # Repository 1: 2 AM
+   trigger:
+     schedule: "0 2 * * *"
+
+   # Repository 2: 3 AM
+   trigger:
+     schedule: "0 3 * * *"
+
+   # Repository 3: 4 AM
+   trigger:
+     schedule: "0 4 * * *"
+
+Monitoring and Observability
+============================
+
+Key Metrics to Monitor
+-----------------------
+
+**Maintenance Health Metrics:**
+
+- ``volsync_kopia_maintenance_last_run_timestamp_seconds``: Last successful maintenance
+- ``volsync_kopia_maintenance_duration_seconds``: Maintenance duration
+- ``volsync_kopia_maintenance_cronjob_failures_total``: Failed maintenance count
+
+**Repository Health Metrics:**
+
+- Repository size growth rate
+- Deduplication ratio
+- Number of snapshots
+- Orphaned blocks count
+
+Prometheus Queries
+------------------
+
+**Alert on Missing Maintenance:**
+
+.. code-block:: promql
+
+   time() - volsync_kopia_maintenance_last_run_timestamp_seconds > 259200
+
+**Track Maintenance Duration Trends:**
+
+.. code-block:: promql
+
+   rate(volsync_kopia_maintenance_duration_seconds[1d])
+
+**Monitor Cache Effectiveness:**
+
+.. code-block:: bash
+
+   # Check cache hit ratio in maintenance logs
+   kubectl logs -n <namespace> job/<maintenance-job> | grep -i "cache hit"
+
+Integration with CI/CD
+-----------------------
+
+**GitOps Integration Example:**
+
+.. code-block:: yaml
+
+   # In your GitOps repository
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: post-deployment-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       manual: "deployment-${CI_COMMIT_SHA}"  # Trigger after deployment
+     cacheCapacity: 20Gi
+     resources:
+       requests:
+         memory: "2Gi"
+       limits:
+         memory: "4Gi"
+
+**Jenkins Pipeline Example:**
+
+.. code-block:: groovy
+
+   stage('Trigger Maintenance') {
+     steps {
+       script {
+         def triggerValue = "jenkins-${env.BUILD_NUMBER}"
+         sh """
+           kubectl patch kopiamaintenance manual-maintenance \
+             -n production \
+             --type merge \
+             -p '{"spec":{"trigger":{"manual":"${triggerValue}"}}}'
+         """
+
+         // Wait for completion
+         timeout(time: 30, unit: 'MINUTES') {
+           waitUntil {
+             def status = sh(
+               script: "kubectl get kopiamaintenance manual-maintenance -n production -o jsonpath='{.status.lastManualSync}'",
+               returnStdout: true
+             ).trim()
+             return status == triggerValue
+           }
+         }
+       }
+     }
+   }
+
 Next Steps
 ==========
 
 - Review :doc:`backup-configuration` for repository setup
 - Explore :doc:`troubleshooting` for detailed debugging
-- Learn about :doc:`maintenance-schedule-conflicts` if managing multiple repositories
-- Understand `Kopia's maintenance operations <https://kopia.io/docs/maintenance/>`_ in detail
+- Set up monitoring with the :doc:`/examples/kopia/maintenance-alerts`
+- Learn about `Kopia's maintenance operations <https://kopia.io/docs/maintenance/>`_ in detail
+- Understand cache architecture in `Kopia's performance guide <https://kopia.io/docs/advanced/performance/>`_
 
 Support
 =======

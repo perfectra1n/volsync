@@ -130,7 +130,6 @@ retention policies, compression, and actions to ensure consistent MySQL backups:
       trigger:
          schedule: "*/30 * * * *"
       kopia:
-        maintenanceIntervalDays: 7
         repository: kopia-config
         
         # Repository Retention Policy
@@ -196,8 +195,8 @@ In the above ``ReplicationSource`` object:
 - **Performance**: ``parallelism: 2`` enables parallel upload streams for
   faster backup operations, especially beneficial for large databases.
 
-- **Maintenance**: ``maintenanceIntervalDays: 7`` ensures weekly maintenance
-  runs to enforce retention policies and optimize repository storage.
+- **Maintenance**: Repository maintenance should be configured using the KopiaMaintenance CRD
+  (see below) to enforce retention policies and optimize repository storage.
 
 - **Consistency Actions**: The ``actions`` section defines hooks that run
   before and after snapshots:
@@ -226,12 +225,59 @@ In the above ``ReplicationSource`` object:
    maintenance runs, automatically removing snapshots that exceed the defined
    retention limits. This ensures storage efficiency without manual intervention.
 
-Now, deploy the ``kopia-config`` followed by ``ReplicationSource`` configuration.
+Configure KopiaMaintenance
+--------------------------
+
+Since the ``maintenanceIntervalDays`` field has been removed from ReplicationSource, you need to create
+a separate KopiaMaintenance resource to handle repository maintenance:
+
+.. code-block:: yaml
+
+   ---
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+      name: database-maintenance
+      namespace: source
+   spec:
+      repository:
+         repository: kopia-config  # Same secret as ReplicationSource
+      trigger:
+         schedule: "0 2 * * 0"     # Weekly on Sunday at 2 AM
+      # Cache configuration for improved performance
+      cacheCapacity: 5Gi
+      cacheStorageClassName: fast-ssd
+      cacheAccessModes:
+         - ReadWriteOnce
+      resources:
+         requests:
+            memory: "512Mi"
+            cpu: "200m"
+         limits:
+            memory: "2Gi"
+            cpu: "1"
+
+This KopiaMaintenance resource will:
+
+- Run maintenance weekly on Sunday at 2 AM
+- Use a 5Gi persistent cache for improved performance
+- Enforce the retention policies defined in your ReplicationSource
+- Clean up orphaned data blocks and optimize the repository
+
+**Benefits of using KopiaMaintenance CRD:**
+
+- **Flexible scheduling**: Use cron expressions or manual triggers
+- **Performance optimization**: Configure persistent cache for faster operations
+- **Resource control**: Set specific CPU and memory limits for maintenance
+- **Independent operation**: Maintenance runs separately from backup jobs
+
+Now, deploy the ``kopia-config``, ``ReplicationSource``, and ``KopiaMaintenance`` configurations.
 
 .. code-block:: console
 
    $ kubectl create -f examples/kopia/source-kopia/source-kopia.yaml -n source
    $ kubectl create -f examples/kopia/volsync_v1alpha1_replicationsource.yaml -n source
+   $ kubectl apply -f database-maintenance.yaml -n source
 
 To verify the replication has completed, view the ReplicationSource
 ``.status`` field.
@@ -578,7 +624,6 @@ For ``pvc-a``:
       trigger:
          schedule: "*/30 * * * *"
       kopia:
-        maintenanceIntervalDays: 7
         repository: kopia-config-shared  # Use shared repository
         retain:
           daily: 7
@@ -609,7 +654,6 @@ For ``pvc-b``:
       trigger:
          schedule: "*/30 * * * *"
       kopia:
-        maintenanceIntervalDays: 7
         repository: kopia-config-shared  # SAME shared repository
         retain:
           daily: 7
