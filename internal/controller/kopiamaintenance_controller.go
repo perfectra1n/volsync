@@ -396,24 +396,37 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptr.To(true),
+						FSGroup:      ptr.To(int64(1000)),
+						RunAsUser:    ptr.To(int64(1000)),
+					},
 					Containers: []corev1.Container{
 						{
-							Name:  "kopia-maintenance",
-							Image: r.getContainerImage(),
-							Command: []string{
-								"/bin/bash",
-								"-c",
-								"kopia maintenance run --full",
-							},
+							Name:            "kopia-maintenance",
+							Image:           r.getContainerImage(),
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"/bin/bash", "-c"},
+							Args:    []string{"/mover-kopia/entry.sh"},
 							Env: []corev1.EnvVar{
 								{
-									Name: "KOPIA_PASSWORD",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: maintenance.GetRepositorySecret(),
-											},
-											Key: "KOPIA_PASSWORD",
+									Name:  "DIRECTION",
+									Value: "maintenance",
+								},
+								{
+									Name:  "KOPIA_CACHE_DIRECTORY",
+									Value: "/tmp/cache",
+								},
+								{
+									Name:  "KOPIA_LOG_DIR",
+									Value: "/tmp/kopia-logs",
+								},
+							},
+							EnvFrom: []corev1.EnvFromSource{
+								{
+									SecretRef: &corev1.SecretEnvSource{
+										LocalObjectReference: corev1.LocalObjectReference{
+											Name: maintenance.GetRepositorySecret(),
 										},
 									},
 								},
@@ -431,6 +444,16 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 									},
 								}
 							}(),
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptr.To(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+								Privileged:             ptr.To(false),
+								ReadOnlyRootFilesystem: ptr.To(true),
+								RunAsNonRoot:           ptr.To(true),
+								RunAsUser:              ptr.To(int64(1000)),
+							},
 						},
 					},
 					Affinity: maintenance.Spec.Affinity,
