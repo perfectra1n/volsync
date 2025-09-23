@@ -102,6 +102,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: RELATED_IMAGE_KOPIA_CONTAINER
+              value: "{{ include "container-image" (list . .Values.kopia) }}"
           livenessProbe:
             httpGet:
               path: /healthz

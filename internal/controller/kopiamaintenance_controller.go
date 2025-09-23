@@ -406,8 +406,7 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 							Name:            "kopia-maintenance",
 							Image:           r.getContainerImage(),
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							Command:         []string{"/bin/bash", "-c"},
-							Args:    []string{"/mover-kopia/entry.sh"},
+							Command:         []string{"/mover-kopia/entry.sh"},
 							Env: []corev1.EnvVar{
 								{
 									Name:  "DIRECTION",
@@ -770,8 +769,7 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyn
 									Name:            "kopia-maintenance",
 									Image:           r.getContainerImage(),
 									ImagePullPolicy: corev1.PullIfNotPresent,
-									Command:         []string{"/bin/bash", "-c"},
-									Args:            []string{"/mover-kopia/entry.sh"},
+									Command:         []string{"/mover-kopia/entry.sh"},
 									Env:             envVars,
 									EnvFrom: []corev1.EnvFromSource{
 										{
