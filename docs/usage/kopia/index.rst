@@ -14,6 +14,7 @@ Kopia-based backup
    restore-configuration
    cross-namespace-restore
    maintenance-cronjobs
+   kopia-maintenance-crd
    additional-args
    troubleshooting
    custom-ca
@@ -316,6 +317,12 @@ The Kopia documentation has been organized into focused sections for easier navi
    Complete guide to the new maintenance CronJob feature that provides decoupled, scalable
    repository maintenance operations. Covers configuration, migration from maintenanceIntervalDays,
    repository deduplication, monitoring, and troubleshooting.
+
+:doc:`kopia-maintenance-crd`
+   Comprehensive reference for the KopiaMaintenance Custom Resource Definition (CRD), a cluster-scoped
+   resource that provides centralized, flexible management of Kopia repository maintenance operations.
+   Covers repository selector mode, direct repository mode, advanced matching criteria, priority-based
+   conflict resolution, migration guide, best practices, and complete API reference.
 
 :doc:`troubleshooting`
    Comprehensive troubleshooting guide covering enhanced error reporting, snapshot discovery,
