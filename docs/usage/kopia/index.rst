@@ -14,7 +14,9 @@ Kopia-based backup
    restore-configuration
    cross-namespace-restore
    maintenance-cronjobs
+   kopiamaintenance
    kopia-maintenance-crd
+   maintenance-schedule-conflicts
    additional-args
    troubleshooting
    custom-ca
