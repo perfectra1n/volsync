@@ -28,6 +28,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -99,6 +100,7 @@ func (r *KopiaMaintenanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch
@@ -413,12 +415,12 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 									Value: "maintenance",
 								},
 								{
-									Name:  "KOPIA_CACHE_DIRECTORY",
-									Value: "/tmp/cache",
+									Name:  "DATA_DIR",
+									Value: "/data", // Not used for maintenance but entry.sh expects it
 								},
 								{
-									Name:  "KOPIA_LOG_DIR",
-									Value: "/tmp/kopia-logs",
+									Name:  "KOPIA_CACHE_DIR",
+									Value: "/cache",
 								},
 							},
 							EnvFrom: []corev1.EnvFromSource{
@@ -467,6 +469,13 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 			TTLSecondsAfterFinished: ptr.To(int32(3600)), // Clean up after 1 hour
 		},
 	}
+
+	// Add cache support
+	cachePVC, err := r.ensureCache(ctx, maintenance)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure cache: %w", err)
+	}
+	r.configureCacheVolume(&job.Spec.Template.Spec, cachePVC, maintenance)
 
 	// Set owner reference so the job is cleaned up when KopiaMaintenance is deleted
 	if err := controllerutil.SetControllerReference(maintenance, job, r.Scheme); err != nil {
@@ -563,7 +572,10 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 	}
 
 	// Create new CronJob
-	cronJob := r.buildMaintenanceCronJob(maintenance, cronJobName)
+	cronJob, err := r.buildMaintenanceCronJob(ctx, maintenance, cronJobName)
+	if err != nil {
+		return "", fmt.Errorf("failed to build CronJob: %w", err)
+	}
 
 	// Set owner reference so the CronJob is cleaned up when KopiaMaintenance is deleted
 	if err := controllerutil.SetControllerReference(maintenance, cronJob, r.Scheme); err != nil {
@@ -582,7 +594,7 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 }
 
 // buildMaintenanceCronJob creates a CronJob spec for Kopia maintenance
-func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyncv1alpha1.KopiaMaintenance, cronJobName string) *batchv1.CronJob {
+func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance, cronJobName string) (*batchv1.CronJob, error) {
 	// Determine resources
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
@@ -599,38 +611,16 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyn
 	// Build environment variables
 	envVars := []corev1.EnvVar{
 		{
-			Name:  "KOPIA_CONFIG_PATH",
-			Value: "/tmp/kopia-config",
-		},
-		{
-			Name:  "KOPIA_CACHE_DIRECTORY",
-			Value: "/tmp/kopia-cache",
-		},
-		{
-			Name:  "KOPIA_LOG_LEVEL",
-			Value: "info",
-		},
-		{
-			Name:  "KOPIA_LOG_DIR",
-			Value: "/tmp/kopia-logs",
-		},
-		{
-			Name:  "KOPIA_PERSIST_CREDENTIALS_ON_CONNECT",
-			Value: "false",
-		},
-		// Set maintenance mode
-		{
-			Name:  "VOLSYNC_KOPIA_MODE",
+			Name:  "DIRECTION",
 			Value: "maintenance",
 		},
-		// Use maintenance username
 		{
-			Name:  "KOPIA_USERNAME",
-			Value: "maintenance@volsync",
+			Name:  "DATA_DIR",
+			Value: "/data", // Not used for maintenance but entry.sh expects it
 		},
 		{
-			Name:  "KOPIA_HOSTNAME",
-			Value: "maintenance",
+			Name:  "KOPIA_CACHE_DIR",
+			Value: "/cache",
 		},
 	}
 
@@ -804,6 +794,13 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyn
 		},
 	}
 
+	// Add cache support
+	cachePVC, err := r.ensureCache(ctx, maintenance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure cache: %w", err)
+	}
+	r.configureCacheVolume(&cronJob.Spec.JobTemplate.Spec.Template.Spec, cachePVC, maintenance)
+
 	// Apply history limits if specified
 	if maintenance.Spec.SuccessfulJobsHistoryLimit != nil {
 		cronJob.Spec.SuccessfulJobsHistoryLimit = maintenance.Spec.SuccessfulJobsHistoryLimit
@@ -812,7 +809,7 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyn
 		cronJob.Spec.FailedJobsHistoryLimit = maintenance.Spec.FailedJobsHistoryLimit
 	}
 
-	return cronJob
+	return cronJob, nil
 }
 
 // cleanupCronJob removes the CronJob managed by this KopiaMaintenance
@@ -1041,4 +1038,121 @@ func (r *KopiaMaintenanceReconciler) calculateNextScheduledTime(schedule string)
 	now := time.Now()
 	next := sched.Next(now)
 	return next, nil
+}
+
+// ensureCache ensures the cache PVC exists if configured, or returns nil for EmptyDir fallback
+func (r *KopiaMaintenanceReconciler) ensureCache(ctx context.Context, km *volsyncv1alpha1.KopiaMaintenance) (*corev1.PersistentVolumeClaim, error) {
+	// Check if an existing PVC is specified
+	if km.Spec.CachePVC != nil && *km.Spec.CachePVC != "" {
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      *km.Spec.CachePVC,
+			Namespace: km.Namespace,
+		}, pvc); err != nil {
+			return nil, fmt.Errorf("failed to get cache PVC %s: %w", *km.Spec.CachePVC, err)
+		}
+		return pvc, nil
+	}
+
+	// Determine cache configuration scenario
+	hasPVCConfig := km.Spec.CacheStorageClassName != nil || km.Spec.CacheAccessModes != nil
+	hasCapacityOnly := km.Spec.CacheCapacity != nil && !hasPVCConfig
+	hasNoCacheConfig := km.Spec.CacheCapacity == nil && !hasPVCConfig
+
+	// Use EmptyDir fallback for scenarios 1 and 2
+	if hasNoCacheConfig || hasCapacityOnly {
+		return nil, nil // nil PVC means EmptyDir will be used
+	}
+
+	// Scenario 3: Create PVC
+	cacheName := fmt.Sprintf("volsync-kopia-maintenance-%s-cache", km.Name)
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cacheName,
+			Namespace: km.Namespace,
+		},
+	}
+
+	// Check if PVC already exists
+	err := r.Get(ctx, client.ObjectKeyFromObject(pvc), pvc)
+	if err == nil {
+		return pvc, nil // PVC exists
+	}
+	if !kerrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	// Create new PVC
+	capacity := resource.MustParse("1Gi")
+	if km.Spec.CacheCapacity != nil {
+		capacity = *km.Spec.CacheCapacity
+	}
+
+	accessModes := km.Spec.CacheAccessModes
+	if len(accessModes) == 0 {
+		accessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	}
+
+	pvc.Spec = corev1.PersistentVolumeClaimSpec{
+		AccessModes: accessModes,
+		Resources: corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceStorage: capacity,
+			},
+		},
+		StorageClassName: km.Spec.CacheStorageClassName,
+	}
+
+	if err := ctrl.SetControllerReference(km, pvc, r.Scheme); err != nil {
+		return nil, err
+	}
+
+	if err := r.Create(ctx, pvc); err != nil {
+		return nil, err
+	}
+
+	return pvc, nil
+}
+
+// configureCacheVolume configures the cache volume on the pod spec
+func (r *KopiaMaintenanceReconciler) configureCacheVolume(podSpec *corev1.PodSpec, cachePVC *corev1.PersistentVolumeClaim, km *volsyncv1alpha1.KopiaMaintenance) {
+	// Add volume mount to container
+	podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, corev1.VolumeMount{
+		Name:      "kopia-cache",
+		MountPath: "/cache",
+	})
+
+	var cacheVolume corev1.Volume
+	if cachePVC != nil {
+		// Use PVC when cache is configured
+		cacheVolume = corev1.Volume{
+			Name: "kopia-cache",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: cachePVC.Name,
+				},
+			},
+		}
+	} else {
+		// Use EmptyDir as fallback
+		emptyDirSource := &corev1.EmptyDirVolumeSource{}
+
+		// Set size limit based on configuration
+		if km.Spec.CacheCapacity != nil {
+			emptyDirSource.SizeLimit = km.Spec.CacheCapacity
+		} else {
+			defaultLimit := resource.MustParse("8Gi")
+			emptyDirSource.SizeLimit = &defaultLimit
+		}
+
+		cacheVolume = corev1.Volume{
+			Name: "kopia-cache",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: emptyDirSource,
+			},
+		}
+	}
+
+	podSpec.Volumes = append(podSpec.Volumes, cacheVolume)
 }

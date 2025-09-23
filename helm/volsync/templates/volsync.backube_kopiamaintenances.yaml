@@ -947,6 +947,26 @@ spec:
                           x-kubernetes-list-type: atomic
                       type: object
                   type: object
+                cacheAccessModes:
+                  description: CacheAccessModes can be used to set the accessModes of Kopia metadata cache volume
+                  items:
+                    type: string
+                  type: array
+                cacheCapacity:
+                  anyOf:
+                    - type: integer
+                    - type: string
+                  description: CacheCapacity can be used to set the size of the Kopia metadata cache volume
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
+                cachePVC:
+                  description: |-
+                    CachePVC is the name of an existing PVC to use for Kopia cache. If not specified,
+                    cache will be determined by other cache fields or use EmptyDir as fallback.
+                  type: string
+                cacheStorageClassName:
+                  description: CacheStorageClassName can be used to set the StorageClass of the Kopia metadata cache volume
+                  type: string
                 enabled:
                   default: true
                   description: |-

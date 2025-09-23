@@ -141,6 +141,23 @@ type KopiaMaintenanceSpec struct {
 	// Affinity for maintenance pods.
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// CacheCapacity can be used to set the size of the Kopia metadata cache volume
+	// +optional
+	CacheCapacity *resource.Quantity `json:"cacheCapacity,omitempty"`
+
+	// CacheStorageClassName can be used to set the StorageClass of the Kopia metadata cache volume
+	// +optional
+	CacheStorageClassName *string `json:"cacheStorageClassName,omitempty"`
+
+	// CacheAccessModes can be used to set the accessModes of Kopia metadata cache volume
+	// +optional
+	CacheAccessModes []corev1.PersistentVolumeAccessMode `json:"cacheAccessModes,omitempty"`
+
+	// CachePVC is the name of an existing PVC to use for Kopia cache. If not specified,
+	// cache will be determined by other cache fields or use EmptyDir as fallback.
+	// +optional
+	CachePVC *string `json:"cachePVC,omitempty"`
 }
 
 // KopiaRepositorySpec defines the repository configuration for maintenance
