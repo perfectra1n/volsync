@@ -58,7 +58,9 @@ const (
 	maintenanceNamespaceLabel  = "volsync.backube/source-namespace"
 	// Annotation for repository config
 	maintenanceRepositoryAnnotation = "volsync.backube/repository-config"
-	// Annotation to track original schedule when conflict occurs
+	// Annotation to track schedule conflicts
+	// When multiple ReplicationSources from different namespaces try to set different
+	// schedules for the same repository, this annotation records the last rejected attempt
 	maintenanceScheduleConflictAnnotation = "volsync.backube/schedule-conflict"
 	// ServiceAccount name for maintenance
 	maintenanceServiceAccountName = "volsync-kopia-maintenance"
@@ -155,6 +157,13 @@ func (rc *RepositoryConfig) Hash() string {
 	return hex.EncodeToString(hash[:])[:16] // Use first 16 chars for shorter names
 }
 
+// EnsureMaintenanceCronJob ensures a maintenance CronJob exists for the given ReplicationSource
+// This is the public API for the proactive maintenance controller
+func (m *MaintenanceManager) EnsureMaintenanceCronJob(ctx context.Context,
+	source *volsyncv1alpha1.ReplicationSource) error {
+	return m.ReconcileMaintenanceForSource(ctx, source)
+}
+
 // ReconcileMaintenanceForSource ensures a maintenance CronJob exists for the repository
 // used by this ReplicationSource
 func (m *MaintenanceManager) ReconcileMaintenanceForSource(ctx context.Context,
@@ -243,38 +252,57 @@ func (m *MaintenanceManager) ensureMaintenanceCronJob(ctx context.Context,
 		return fmt.Errorf("failed to get CronJob: %w", err)
 	}
 
-	// Phase 4: Handle schedule conflicts - first-wins strategy
+	// Phase 4: Handle schedule conflicts using FIRST-WINS strategy
+	// Strategy explanation:
+	// When multiple ReplicationSources use the same Kopia repository but specify different
+	// maintenance schedules, we use a "first-wins" strategy to resolve conflicts:
+	// 1. The first ReplicationSource to create a maintenance CronJob sets the schedule
+	// 2. Subsequent sources from DIFFERENT namespaces cannot change the schedule
+	// 3. Sources from the SAME namespace CAN update the schedule (single-tenant scenario)
+	// 4. Conflicts are tracked via annotations for visibility and debugging
+	// 5. The CronJob persists as long as ANY source needs it (even if first source is deleted)
+	//
+	// Rationale: This prevents unpredictable schedule changes in multi-tenant environments
+	// while allowing single-namespace deployments full control over their maintenance schedule.
 	if existing.Spec.Schedule != cronJob.Spec.Schedule {
 		// Check if this is a genuine conflict or just an update from same source
 		sourceNamespace, exists := existing.Labels[maintenanceNamespaceLabel]
 		if exists && sourceNamespace != repoConfig.Namespace {
-			// Schedule conflict from different namespace - keep existing
-			m.logger.Info("Schedule conflict detected, keeping existing schedule",
+			// CONFLICT: Different namespace trying to change schedule - REJECT
+			m.logger.Info("Schedule conflict detected - preserving existing schedule (first-wins strategy)",
 				"cronJob", existing.Name,
 				"existingSchedule", existing.Spec.Schedule,
 				"requestedSchedule", cronJob.Spec.Schedule,
 				"existingNamespace", sourceNamespace,
-				"requestingNamespace", repoConfig.Namespace)
+				"requestingNamespace", repoConfig.Namespace,
+				"resolution", "keeping existing schedule")
 
-			// Add annotation to track conflict
+			// Track the conflict attempt in annotations for visibility
 			if existing.Annotations == nil {
 				existing.Annotations = make(map[string]string)
 			}
+			// Record the last conflict attempt (overwrites previous conflicts)
 			existing.Annotations[maintenanceScheduleConflictAnnotation] = fmt.Sprintf(
-				"Schedule %s requested from namespace %s at %s",
+				"Last conflict: Schedule '%s' requested from namespace '%s' at %s (rejected - first-wins strategy)",
 				cronJob.Spec.Schedule, repoConfig.Namespace, time.Now().Format(time.RFC3339))
 
 			if err := m.client.Update(ctx, existing); err != nil {
 				m.logger.Error(err, "Failed to update conflict annotation")
 			}
 		} else {
-			// Update from same namespace or initial setup
-			m.logger.Info("Updating maintenance CronJob schedule",
+			// NO CONFLICT: Update from same namespace or initial setup - ALLOW
+			m.logger.Info("Updating maintenance CronJob schedule (same namespace update allowed)",
 				"name", existing.Name,
 				"namespace", existing.Namespace,
 				"oldSchedule", existing.Spec.Schedule,
-				"newSchedule", cronJob.Spec.Schedule)
+				"newSchedule", cronJob.Spec.Schedule,
+				"sourceNamespace", repoConfig.Namespace)
 			existing.Spec.Schedule = cronJob.Spec.Schedule
+
+			// Clear any previous conflict annotations since this is a valid update
+			if existing.Annotations != nil {
+				delete(existing.Annotations, maintenanceScheduleConflictAnnotation)
+			}
 
 			if err := m.client.Update(ctx, existing); err != nil {
 				return err
@@ -724,7 +752,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 									Image:           m.containerImage,
 									ImagePullPolicy: corev1.PullIfNotPresent,
 									Command:         []string{"/bin/bash", "-c"},
-									Args:            []string{"/mover-kopia/entry.sh maintenance"},
+									Args:            []string{"/mover-kopia/entry.sh"},
 									Env:             envVars,
 									EnvFrom: []corev1.EnvFromSource{
 										{

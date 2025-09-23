@@ -181,8 +181,6 @@ echo "AWS_DEFAULT_REGION: $([ -n "${AWS_DEFAULT_REGION}" ] && echo "[SET]" || ec
 echo "AWS_REGION: $([ -n "${AWS_REGION}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_OVERRIDE_USERNAME: $([ -n "${KOPIA_OVERRIDE_USERNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_OVERRIDE_HOSTNAME: $([ -n "${KOPIA_OVERRIDE_HOSTNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
-echo "KOPIA_OVERRIDE_MAINTENANCE_USERNAME: $([ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
-echo "KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME: $([ -n "${KOPIA_OVERRIDE_MAINTENANCE_HOSTNAME}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_SOURCE_PATH_OVERRIDE: $([ -n "${KOPIA_SOURCE_PATH_OVERRIDE}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_MANUAL_CONFIG: $([ -n "${KOPIA_MANUAL_CONFIG}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_RESTORE_AS_OF: $([ -n "${KOPIA_RESTORE_AS_OF}" ] && echo "[SET]" || echo "[NOT SET]")"
@@ -250,51 +248,8 @@ function error {
     exit "$1"
 }
 
-# Log repository health metrics (useful for maintenance monitoring)
-function log_repository_health {
-    local context="$1"  # e.g., "before_maintenance" or "after_maintenance"
-
-    log_info "Repository health check (${context}):"
-
-    # Get repository status
-    local repo_status
-    if repo_status=$("${KOPIA[@]}" repository status --json 2>/dev/null); then
-        # Extract and log key metrics
-        local total_size content_count unique_count blob_count
-        total_size=$(echo "${repo_status}" | jq -r '.contentBytes // 0' 2>/dev/null || echo "0")
-        content_count=$(echo "${repo_status}" | jq -r '.contentCount // 0' 2>/dev/null || echo "0")
-        unique_count=$(echo "${repo_status}" | jq -r '.uniqueContentCount // 0' 2>/dev/null || echo "0")
-        blob_count=$(echo "${repo_status}" | jq -r '.blobCount // 0' 2>/dev/null || echo "0")
-
-        # Convert bytes to human-readable format
-        local size_gb=$(echo "scale=2; ${total_size} / (1024*1024*1024)" | bc 2>/dev/null || echo "0")
-
-        log_info "  REPO_SIZE_BYTES: ${total_size}"
-        log_info "  REPO_SIZE_GB: ${size_gb}"
-        log_info "  CONTENT_COUNT: ${content_count}"
-        log_info "  UNIQUE_CONTENT_COUNT: ${unique_count}"
-        log_info "  BLOB_COUNT: ${blob_count}"
-
-        # Calculate deduplication ratio if possible
-        if [[ ${unique_count} -gt 0 ]] && [[ ${content_count} -gt 0 ]]; then
-            local dedup_ratio=$(echo "scale=2; ${content_count} / ${unique_count}" | bc 2>/dev/null || echo "N/A")
-            log_info "  DEDUPLICATION_RATIO: ${dedup_ratio}"
-        fi
-    else
-        log_error "Failed to get repository status"
-    fi
-
-    # Check maintenance info
-    local maint_info
-    if maint_info=$("${KOPIA[@]}" maintenance info --json 2>/dev/null); then
-        local next_full next_quick
-        next_full=$(echo "${maint_info}" | jq -r '.nextFullMaintenanceTime // "N/A"' 2>/dev/null || echo "N/A")
-        next_quick=$(echo "${maint_info}" | jq -r '.nextQuickMaintenanceTime // "N/A"' 2>/dev/null || echo "N/A")
-
-        log_info "  NEXT_FULL_MAINTENANCE: ${next_full}"
-        log_info "  NEXT_QUICK_MAINTENANCE: ${next_quick}"
-    fi
-}
+# Function removed: log_repository_health is no longer needed
+# Repository health monitoring should be done through metrics/monitoring systems
 
 # Error and exit if a variable isn't defined
 # check_var_defined "MY_VAR"
@@ -346,117 +301,69 @@ function check_contents {
 # Set the client identity using 'kopia repository set-client' command
 # This must be called AFTER successfully connecting to the repository
 function set_client_identity {
-    local username=""
-    local hostname=""
-    local should_set_identity=false
+    # Client identity logic for both regular and maintenance modes
 
+    # For maintenance mode, set the maintenance identity
     if [[ "${DIRECTION}" == "maintenance" ]]; then
-        # In maintenance mode, always set identity
-        should_set_identity=true
+        local username="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-maintenance}"
+        local hostname="volsync"
 
-        if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
-            # Parse the maintenance username (format: user@host or just user)
-            if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
-                # Split into user and host
-                username="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME%%@*}"
-                hostname="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME##*@}"
-                log_info "Maintenance mode: Setting client identity to '${username}@${hostname}'"
-            else
-                # If no @, use it as username with hostname 'volsync'
-                username="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}"
-                hostname="volsync"
-                log_info "Maintenance mode: Setting client identity to '${username}@${hostname}'"
-            fi
-        elif [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-            # Fall back to regular overrides if set
-            if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
-                username="${KOPIA_OVERRIDE_USERNAME}"
-            else
-                username="maintenance"
-            fi
-            if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-                hostname="${KOPIA_OVERRIDE_HOSTNAME}"
-            else
-                hostname="volsync"
-            fi
-            log_info "Maintenance mode: Setting client identity to '${username}@${hostname}'"
+        # Parse username if it contains @ (format: user@host)
+        if [[ "${username}" == *"@"* ]]; then
+            hostname="${username##*@}"
+            username="${username%%@*}"
+        fi
+
+        log_info "Setting maintenance identity to '${username}@${hostname}'"
+        local should_set_identity=true
+    elif [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+        local username=""
+        local hostname=""
+
+        if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
+            username="${KOPIA_OVERRIDE_USERNAME}"
         else
-            # Default maintenance identity
-            username="maintenance"
-            hostname="volsync"
-            log_info "Maintenance mode: Setting client identity to 'maintenance@volsync'"
+            # Get current system username if only hostname override is set
+            username="$(whoami)"
         fi
+
+        if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
+            hostname="${KOPIA_OVERRIDE_HOSTNAME}"
+        else
+            # Get current system hostname if only username override is set
+            hostname="$(hostname)"
+        fi
+
+        log_info "Setting client identity to '${username}@${hostname}'"
+        local should_set_identity=true
     else
-        # Regular mode: only set identity if overrides are provided
-        if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] || [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-            should_set_identity=true
-
-            if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]]; then
-                username="${KOPIA_OVERRIDE_USERNAME}"
-            else
-                # Get current system username if only hostname override is set
-                username="$(whoami)"
-            fi
-
-            if [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
-                hostname="${KOPIA_OVERRIDE_HOSTNAME}"
-            else
-                # Get current system hostname if only username override is set
-                hostname="$(hostname)"
-            fi
-
-            log_info "Setting client identity to '${username}@${hostname}'"
-        fi
+        local should_set_identity=false
     fi
 
     # Execute the set-client command if we need to set identity
     if [[ "${should_set_identity}" == "true" ]]; then
         log_info "Applying client identity configuration..."
-        log_info "DEBUG: set_client_identity details:"
-        log_info "  should_set_identity=${should_set_identity}"
-        log_info "  username=${username}"
-        log_info "  hostname=${hostname}"
-
         local SET_CLIENT_CMD=("${KOPIA[@]}" repository set-client)
 
         if [[ -n "${username}" ]]; then
             SET_CLIENT_CMD+=("--username=${username}")
-            log_info "  Adding --username=${username} to command"
-        else
-            log_info "  WARNING: username is empty, not adding to command"
         fi
 
         if [[ -n "${hostname}" ]]; then
             SET_CLIENT_CMD+=("--hostname=${hostname}")
-            log_info "  Adding --hostname=${hostname} to command"
-        else
-            log_info "  WARNING: hostname is empty, not adding to command"
         fi
 
-        log_info "DEBUG: Full set-client command: ${SET_CLIENT_CMD[*]}"
-
-        log_info "Executing set-client command..."
         if "${SET_CLIENT_CMD[@]}" 2>&1; then
             log_info "✓ Client identity set successfully to ${username}@${hostname}"
-
-            # Verify it was actually set
-            log_info "DEBUG: Verifying identity was actually changed..."
-            "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || log_info "  Could not verify identity"
         else
             local exit_code=$?
             log_error "✗ Failed to set client identity (exit code: ${exit_code})"
-            log_error "  This may affect maintenance operations"
             # Don't fail here, as the repository is connected and can still work
             # Just warn about potential ownership issues
             echo "Warning: Client identity could not be set. Maintenance may fail due to ownership mismatch."
         fi
     else
-        log_info "NOT setting client identity (should_set_identity=${should_set_identity})"
-        log_info "DEBUG: Why not setting identity:"
-        log_info "  DIRECTION=${DIRECTION}"
-        log_info "  In maintenance mode: $([[ "${DIRECTION}" == "maintenance" ]] && echo "yes" || echo "no")"
-        log_info "  Username would be: ${username:-[empty]}"
-        log_info "  Hostname would be: ${hostname:-[empty]}"
+        log_info "Skipping client identity configuration"
     fi
 }
 
@@ -1026,7 +933,6 @@ function ensure_connected {
     echo ""
 
     # Set client identity after successful connection (for snapshot ownership)
-    log_info "About to set client identity (DIRECTION=${DIRECTION}, KOPIA_OVERRIDE_MAINTENANCE_USERNAME=${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-not set})"
     set_client_identity
 
     # Verify the client identity was set correctly
@@ -1578,7 +1484,7 @@ function do_backup {
 }
 
 function ensure_maintenance_ownership {
-    log_info "=== Checking maintenance ownership ==="
+    log_info "=== Checking maintenance ownership ===="
 
     # Use dedicated maintenance identity (complete user@host format)
     local expected_owner
@@ -1593,176 +1499,102 @@ function ensure_maintenance_ownership {
         expected_owner="maintenance@volsync"
     fi
 
+    log_info "Expected maintenance owner: ${expected_owner}"
+
     # Check current maintenance owner
-    log_info "Checking current maintenance owner..."
     local maintenance_info
     if maintenance_info=$("${KOPIA[@]}" maintenance info 2>&1); then
-        log_info "Current maintenance info: ${maintenance_info}"
+        # Extract current owner from maintenance info
+        local current_owner=""
+        if echo "${maintenance_info}" | grep -q "Owner:"; then
+            current_owner=$(echo "${maintenance_info}" | grep "Owner:" | sed 's/.*Owner: *//' | sed 's/ .*//')
+            log_info "Current maintenance owner: ${current_owner}"
+        fi
 
         # Check if we're already the owner
-        if echo "${maintenance_info}" | grep -q "Owner:.*${expected_owner}"; then
-            log_info "✓ Already maintenance owner: ${expected_owner}"
+        if [[ "${current_owner}" == "${expected_owner}" ]]; then
+            log_info "✓ Already maintenance owner"
             return 0
         fi
 
-        # Try to claim ownership
-        log_info "Taking maintenance ownership for: ${expected_owner}"
+        # Check if another owner is set
+        if [[ -n "${current_owner}" ]] && [[ "${current_owner}" != "${expected_owner}" ]]; then
+            log_warn "Repository has different maintenance owner: ${current_owner}"
+            log_warn "Expected: ${expected_owner}"
+
+            # Try to take ownership anyway (in case the other owner is no longer active)
+            log_info "Attempting to claim maintenance ownership..."
+            if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
+                log_info "✓ Successfully claimed maintenance ownership"
+                return 0
+            else
+                log_error "✗ Cannot claim maintenance ownership from ${current_owner}"
+                log_error "This repository's maintenance is managed by another user/system"
+                return 1
+            fi
+        fi
+
+        # No owner set, claim it
+        log_info "No maintenance owner set, claiming ownership..."
         if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
-            log_info "✓ Successfully claimed maintenance ownership"
+            log_info "✓ Successfully set as maintenance owner"
             return 0
         else
-            log_warn "Failed to claim maintenance ownership, attempting maintenance anyway"
-            log_info "This may fail if another user is the designated maintenance owner"
+            log_warn "Failed to set maintenance ownership"
             return 1
         fi
     else
-        log_warn "Could not retrieve maintenance info: ${maintenance_info}"
-        log_info "Attempting to set maintenance owner anyway..."
+        log_warn "Could not retrieve maintenance info, attempting to set ownership anyway..."
 
         # Try to set ownership even if info command failed
         if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
             log_info "✓ Successfully set maintenance ownership"
             return 0
         else
-            log_warn "Failed to set maintenance ownership, proceeding with maintenance attempt"
+            log_error "Failed to set maintenance ownership"
             return 1
         fi
     fi
 }
 
 function do_maintenance {
-    log_info "=== Starting maintenance operation ==="
+    log_info "=== Starting maintenance operation ===="
     local maint_start_time=$(date +%s)
 
-    # Debug: Check environment variables
-    log_info "DEBUG: Environment check before maintenance:"
-    log_info "  DIRECTION=${DIRECTION}"
-    log_info "  KOPIA_OVERRIDE_MAINTENANCE_USERNAME=${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-[not set]}"
-    log_info "  KOPIA_OVERRIDE_USERNAME=${KOPIA_OVERRIDE_USERNAME:-[not set]}"
-    log_info "  KOPIA_OVERRIDE_HOSTNAME=${KOPIA_OVERRIDE_HOSTNAME:-[not set]}"
-    log_info "  USER=${USER}"
-    log_info "  HOSTNAME=${HOSTNAME}"
-
-    # Check current identity BEFORE setting
-    log_info "DEBUG: Current Kopia identity BEFORE set_client_identity:"
-    "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || log_info "  Could not extract identity from repository status"
-
-    # CRITICAL: Set client identity right before maintenance
-    # This ensures we're using the correct identity (maintenance@volsync) when running maintenance
-    log_info "Setting client identity before maintenance..."
+    # Set the maintenance identity first
     set_client_identity
 
-    # Verify the identity is set correctly
-    log_info "DEBUG: Current Kopia identity AFTER set_client_identity:"
-    "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || log_info "  Could not extract identity from repository status"
+    # Ensure we have maintenance ownership
+    if ! ensure_maintenance_ownership; then
+        log_error "Could not establish maintenance ownership"
+        log_error "Another process/user owns maintenance for this repository"
+        # For KopiaMaintenance CRD, we should fail to let the CronJob retry later
+        return 1
+    fi
 
-    # Let's also check what maintenance info shows about the current user
-    log_info "DEBUG: Checking maintenance info before ownership check:"
-    "${KOPIA[@]}" maintenance info 2>&1 | head -20 || log_info "  Could not get maintenance info"
-
-    # Ensure we have maintenance ownership before running maintenance
-    ensure_maintenance_ownership
-
-    # Check maintenance info again after ownership
-    log_info "DEBUG: Checking maintenance info after ownership check:"
-    "${KOPIA[@]}" maintenance info 2>&1 | grep -E "Owner|owner" || log_info "  Could not extract owner from maintenance info"
-
-    # Log repository health before maintenance
-    log_repository_health "before_maintenance"
-
-    # Run maintenance with proper error handling
-    log_info "Running full maintenance cycle..."
-    log_info "DEBUG: About to run maintenance command:"
-    log_info "  Command: ${KOPIA[*]} maintenance run --full"
-    log_info "  Current USER env var: ${USER}"
-    log_info "  Current HOSTNAME env var: ${HOSTNAME}"
-
+    # Run full maintenance cycle
+    log_info "Running Kopia full maintenance..."
     local maint_exit_code=0
     if ! "${KOPIA[@]}" maintenance run --full 2>&1; then
         maint_exit_code=$?
         log_error "Maintenance operation failed with exit code: ${maint_exit_code}"
-
-        # Extra debug on failure
-        log_info "DEBUG: Maintenance failed, checking current state:"
-        log_info "  Current identity:"
-        "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || true
-        log_info "  Maintenance owner:"
-        "${KOPIA[@]}" maintenance info 2>&1 | grep -E "Owner|owner" || true
-
-        # For dedicated maintenance mode, we should fail to trigger CronJob retry logic
-        if [[ "${DIRECTION}" == "maintenance" ]]; then
-            log_error "Maintenance failed in dedicated maintenance mode"
-            log_info "Kubernetes CronJob will handle retry based on configured policy"
-            # Return failure to allow Kubernetes retry logic to work
-            return 1
-        else
-            # For backup operations, maintenance failure is non-critical
-            log_error "Warning: Maintenance operation failed during backup, but continuing"
-            return 0
-        fi
+        # Return failure for CronJob retry logic
+        return ${maint_exit_code}
     fi
-
-    # Log repository health after maintenance
-    log_repository_health "after_maintenance"
 
     local maint_end_time=$(date +%s)
     local maint_duration=$((maint_end_time - maint_start_time))
-    log_timing "Maintenance operation completed in ${maint_duration} seconds"
+    log_info "Maintenance operation completed successfully in ${maint_duration} seconds"
 
-    # Log maintenance completion status for monitoring
-    if [[ ${maint_exit_code} -eq 0 ]]; then
-        log_info "MAINTENANCE_STATUS: SUCCESS"
-        log_info "MAINTENANCE_DURATION: ${maint_duration}"
-    else
-        log_info "MAINTENANCE_STATUS: FAILED"
-        log_info "MAINTENANCE_DURATION: ${maint_duration}"
-        log_info "MAINTENANCE_EXIT_CODE: ${maint_exit_code}"
-    fi
+    # Log success for monitoring
+    log_info "MAINTENANCE_STATUS: SUCCESS"
+    log_info "MAINTENANCE_DURATION: ${maint_duration}"
 
-    log_info "Maintenance operation finished"
     return 0
 }
 
-# Apply retention policy globally (for maintenance mode)
-function do_retention_global {
-    log_info "=== Applying global retention policy ==="
-
-    declare -a POLICY_CMD
-    POLICY_CMD=("${KOPIA[@]}" "policy" "set" "--global")
-
-    # Build retention policy options
-    if [[ -n "${KOPIA_RETAIN_HOURLY}" ]]; then
-        POLICY_CMD+=(--keep-hourly="${KOPIA_RETAIN_HOURLY}")
-    fi
-    if [[ -n "${KOPIA_RETAIN_DAILY}" ]]; then
-        POLICY_CMD+=(--keep-daily="${KOPIA_RETAIN_DAILY}")
-    fi
-    if [[ -n "${KOPIA_RETAIN_WEEKLY}" ]]; then
-        POLICY_CMD+=(--keep-weekly="${KOPIA_RETAIN_WEEKLY}")
-    fi
-    if [[ -n "${KOPIA_RETAIN_MONTHLY}" ]]; then
-        POLICY_CMD+=(--keep-monthly="${KOPIA_RETAIN_MONTHLY}")
-    fi
-    if [[ -n "${KOPIA_RETAIN_YEARLY}" ]]; then
-        POLICY_CMD+=(--keep-annual="${KOPIA_RETAIN_YEARLY}")
-    fi
-    if [[ -n "${KOPIA_RETAIN_LATEST}" ]]; then
-        POLICY_CMD+=(--keep-latest="${KOPIA_RETAIN_LATEST}")
-    fi
-
-    # Apply policy if any retention options are set
-    if [[ ${#POLICY_CMD[@]} -gt 4 ]]; then
-        log_info "Setting global retention policy..."
-        if ! "${POLICY_CMD[@]}"; then
-            log_error "Warning: Failed to set global retention policy, continuing with defaults"
-            # Don't fail the entire operation for policy setting issues
-        else
-            log_info "Global retention policy applied successfully"
-        fi
-    else
-        log_info "No retention policy settings specified, using defaults"
-    fi
-}
+# Function removed: do_retention_global is no longer needed
+# Global retention should be configured through the KopiaMaintenance CRD if needed
 
 function do_retention {
     echo "=== Applying retention policy ==="
@@ -2003,23 +1835,12 @@ function do_restore {
 }
 
 echo "Testing mandatory env variables"
-# Check the mandatory env variables based on operation mode
-if [[ "${DIRECTION}" == "maintenance" ]]; then
-    # For maintenance mode, only password is required
-    log_info "Maintenance mode: Checking minimal requirements"
-    check_var_defined KOPIA_PASSWORD
-    # Set a dummy DATA_DIR if not provided (won't be used)
-    if [[ -z "${DATA_DIR}" ]]; then
-        export DATA_DIR="/data"
-        log_debug "Set dummy DATA_DIR for maintenance mode: ${DATA_DIR}"
-    fi
-else
-    # For backup/restore operations, check all required variables
-    for var in KOPIA_PASSWORD \
-               DATA_DIR \
-               ; do
-        check_var_defined $var
-    done
+# Check the mandatory env variables
+check_var_defined KOPIA_PASSWORD
+
+# For non-maintenance operations, also check DATA_DIR
+if [[ "${DIRECTION}" != "maintenance" ]]; then
+    check_var_defined DATA_DIR
 fi
 
 # Validate cache directory is writable
@@ -2029,10 +1850,7 @@ fi
 
 log_info "Cache directory validation passed"
 
-# Skip additional validations for maintenance mode
-if [[ "${DIRECTION}" == "maintenance" ]]; then
-    log_info "Maintenance mode: Skipping data directory checks"
-else
+if [[ "${DIRECTION}" != "maintenance" ]]; then
     # Validate data directory exists and is accessible for backup/restore
     if [[ ! -d "${DATA_DIR}" ]]; then
         error 1 "Data directory ${DATA_DIR} does not exist"
@@ -2060,7 +1878,7 @@ if [[ "${DIRECTION}" == "source" ]]; then
     ensure_connected
     do_backup
     do_retention
-    do_maintenance
+    # Maintenance is now handled by the KopiaMaintenance CRD, not during backups
 elif [[ "${DIRECTION}" == "destination" ]]; then
     log_info "=== Running as DESTINATION ===="
     ensure_connected
@@ -2068,41 +1886,16 @@ elif [[ "${DIRECTION}" == "destination" ]]; then
     sync -f "${DATA_DIR}"
 elif [[ "${DIRECTION}" == "maintenance" ]]; then
     log_info "=== Running MAINTENANCE ONLY ===="
-    log_info "Maintenance mode: Dedicated maintenance operation"
-    # Show the complete maintenance identity
-    maintenance_identity=""  # Remove 'local' as we're not in a function
-    if [[ -n "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" ]]; then
-        if [[ "${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}" == *"@"* ]]; then
-            maintenance_identity="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}"
-        else
-            maintenance_identity="${KOPIA_OVERRIDE_MAINTENANCE_USERNAME}@volsync"
-        fi
-    else
-        maintenance_identity="maintenance@volsync"
-    fi
-    log_info "Maintenance Identity: ${maintenance_identity}"
-
-    # For maintenance mode, skip data directory checks
-    log_info "Skipping data directory validation (not needed for maintenance)"
+    # Maintenance mode for KopiaMaintenance CRD
+    # The CRD handles scheduling, but we need to ensure proper ownership
 
     # Connect to repository
     ensure_connected
 
-    # Apply retention policies before maintenance if configured
-    # This ensures old snapshots are marked for deletion before cleanup
-    if [[ -n "${KOPIA_RETAIN_HOURLY}" ]] || [[ -n "${KOPIA_RETAIN_DAILY}" ]] ||
-       [[ -n "${KOPIA_RETAIN_WEEKLY}" ]] || [[ -n "${KOPIA_RETAIN_MONTHLY}" ]] ||
-       [[ -n "${KOPIA_RETAIN_YEARLY}" ]] || [[ -n "${KOPIA_RETAIN_LATEST}" ]]; then
-        log_info "Applying global retention policy before maintenance..."
-        do_retention_global
-    else
-        log_info "No retention policy configured, proceeding with maintenance"
-    fi
-
-    # Run maintenance operations
+    # Run maintenance with ownership handling
     do_maintenance
 
-    log_info "Maintenance-only operation completed"
+    log_info "Maintenance operation completed"
 else
     # Execute operations based on arguments (current VolSync approach)
     for op in "$@"; do
@@ -2119,8 +1912,8 @@ else
                 sync -f "${DATA_DIR}"
                 ;;
             "maintenance")
-                ensure_connected
-                do_maintenance
+                log_error "Command-based maintenance no longer supported. Use KopiaMaintenance CRD."
+                exit 1
                 ;;
             *)
                 error 2 "unknown operation: $op"
@@ -2141,9 +1934,5 @@ log_info "OPERATION_TYPE: ${DIRECTION:-command-based}"
 log_info "OPERATION_START: ${OPERATION_START_TIMESTAMP}"
 log_info "OPERATION_END: ${OPERATION_END_TIMESTAMP}"
 log_info "OPERATION_DURATION_SECONDS: ${OPERATION_DURATION}"
-if [[ "${DIRECTION}" == "maintenance" ]]; then
-    log_info "MAINTENANCE_USERNAME: ${KOPIA_OVERRIDE_USERNAME:-maintenance@volsync}"
-    log_info "MAINTENANCE_HOSTNAME: ${KOPIA_OVERRIDE_HOSTNAME:-maintenance}"
-fi
 log_info "=== Operation finished ==="
 log_info "=== Done ==="

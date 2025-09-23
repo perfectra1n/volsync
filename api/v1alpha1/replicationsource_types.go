@@ -258,7 +258,15 @@ type KopiaActions struct {
 
 type ReplicationSourceKopiaCA CustomCASpec
 
-// MaintenanceCronJobSpec defines the configuration for Kopia maintenance CronJobs
+// MaintenanceCronJobSpec defines the configuration for Kopia maintenance CronJobs.
+// DEPRECATED: Use KopiaMaintenance CRD instead for better separation of concerns
+// and conflict resolution. This field will be removed in a future release.
+// Note: When multiple ReplicationSources use the same Kopia repository but specify
+// different schedules, VolSync uses a "first-wins" strategy where the first source
+// to create the maintenance CronJob sets the schedule. Subsequent sources from
+// different namespaces cannot override this schedule. Sources from the same namespace
+// can update the schedule. See documentation for details on conflict resolution.
+// +kubebuilder:deprecated:warning="MaintenanceCronJobSpec is deprecated. Use KopiaMaintenance CRD instead"
 type MaintenanceCronJobSpec struct {
 	// Enabled determines if maintenance CronJobs should be created.
 	// When false, no maintenance CronJob will be created.
@@ -267,6 +275,9 @@ type MaintenanceCronJobSpec struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// Schedule is a cron schedule for when maintenance should run.
 	// The schedule is interpreted in the controller's timezone.
+	// Note: When multiple ReplicationSources share the same repository,
+	// the first source sets the schedule (first-wins strategy).
+	// Sources from different namespaces cannot override the schedule.
 	// +kubebuilder:validation:Pattern=`^(@(annually|yearly|monthly|weekly|daily|hourly))|((((\d+,)*\d+|(\d+(\/|-)\d+)|\*(\/\d+)?)\s?){5})$`
 	// +kubebuilder:default="0 2 * * *"
 	// +optional
@@ -333,14 +344,17 @@ type ReplicationSourceKopiaSpec struct {
 	// CacheAccessModes can be used to set the accessModes of kopia metadata cache volume
 	//+optional
 	CacheAccessModes []corev1.PersistentVolumeAccessMode `json:"cacheAccessModes,omitempty"`
-	// MaintenanceIntervalDays define how often to run maintenance (deprecated - use MaintenanceCronJob instead)
+	// MaintenanceIntervalDays define how often to run maintenance
+	// DEPRECATED: Use KopiaMaintenance CRD instead for maintenance configuration
 	// A value of 0 disables maintenance. Defaults to 7 if not specified.
-	// +kubebuilder:deprecated:warning="MaintenanceIntervalDays is deprecated. Use MaintenanceCronJob for more flexible scheduling"
+	// +kubebuilder:deprecated:warning="MaintenanceIntervalDays is deprecated. Use KopiaMaintenance CRD for maintenance configuration"
 	//+optional
 	MaintenanceIntervalDays *int32 `json:"maintenanceIntervalDays,omitempty"`
 	// MaintenanceCronJob defines the configuration for scheduled maintenance operations
+	// DEPRECATED: Use KopiaMaintenance CRD instead for better separation of concerns
 	// using Kubernetes CronJobs. This provides more flexibility than MaintenanceIntervalDays
 	// by allowing cron-based scheduling and additional job configuration options.
+	// +kubebuilder:deprecated:warning="MaintenanceCronJob is deprecated. Use KopiaMaintenance CRD for maintenance configuration"
 	//+optional
 	MaintenanceCronJob *MaintenanceCronJobSpec `json:"maintenanceCronJob,omitempty"`
 	// Actions defines pre/post snapshot actions
@@ -398,8 +412,12 @@ type ReplicationSourceKopiaStatus struct {
 	//+optional
 	MaintenanceFailures int `json:"maintenanceFailures,omitempty"`
 	// maintenanceCronJob is the name of the maintenance CronJob
+	// DEPRECATED: Will be removed when embedded maintenance fields are removed
 	//+optional
 	MaintenanceCronJob string `json:"maintenanceCronJob,omitempty"`
+	// kopiaMaintenance is the name of the KopiaMaintenance resource managing this source's maintenance
+	//+optional
+	KopiaMaintenance string `json:"kopiaMaintenance,omitempty"`
 }
 
 // define the Syncthing field
