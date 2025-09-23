@@ -752,7 +752,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 									Image:           m.containerImage,
 									ImagePullPolicy: corev1.PullIfNotPresent,
 									Command:         []string{"/bin/bash", "-c"},
-									Args:            []string{"/mover-kopia/entry.sh maintenance"},
+									Args:            []string{"/mover-kopia/entry.sh"},
 									Env:             envVars,
 									EnvFrom: []corev1.EnvFromSource{
 										{
