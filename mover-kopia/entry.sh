@@ -354,7 +354,7 @@ function set_client_identity {
         fi
 
         if "${SET_CLIENT_CMD[@]}" 2>&1; then
-            log_info "✓ Client identity set successfully to ${username}@${hostname}"
+            log_info " Client identity set successfully to ${username}@${hostname}"
         else
             local exit_code=$?
             log_error "✗ Failed to set client identity (exit code: ${exit_code})"
@@ -1513,7 +1513,7 @@ function ensure_maintenance_ownership {
 
         # Check if we're already the owner
         if [[ "${current_owner}" == "${expected_owner}" ]]; then
-            log_info "✓ Already maintenance owner"
+            log_info " Already maintenance owner"
             return 0
         fi
 
@@ -1525,7 +1525,7 @@ function ensure_maintenance_ownership {
             # Try to take ownership anyway (in case the other owner is no longer active)
             log_info "Attempting to claim maintenance ownership..."
             if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
-                log_info "✓ Successfully claimed maintenance ownership"
+                log_info " Successfully claimed maintenance ownership"
                 return 0
             else
                 log_error "✗ Cannot claim maintenance ownership from ${current_owner}"
@@ -1537,7 +1537,7 @@ function ensure_maintenance_ownership {
         # No owner set, claim it
         log_info "No maintenance owner set, claiming ownership..."
         if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
-            log_info "✓ Successfully set as maintenance owner"
+            log_info " Successfully set as maintenance owner"
             return 0
         else
             log_warn "Failed to set maintenance ownership"
@@ -1548,7 +1548,7 @@ function ensure_maintenance_ownership {
 
         # Try to set ownership even if info command failed
         if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
-            log_info "✓ Successfully set maintenance ownership"
+            log_info " Successfully set maintenance ownership"
             return 0
         else
             log_error "Failed to set maintenance ownership"

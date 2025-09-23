@@ -415,12 +415,12 @@ Summary
 
 VolSync's hostname design is intentional and provides:
 
-✓ **Guaranteed Uniqueness**: Leverages Kubernetes constraints
-✓ **Clear Multi-Tenancy**: Namespace as tenant boundary
-✓ **Predictable Behavior**: Always know what to expect
-✓ **Simplified Management**: Easy to understand and operate
-✓ **No Collision Risk**: Impossible to have identity conflicts
-✓ **Kubernetes-Native**: Aligns with platform philosophy
+ **Guaranteed Uniqueness**: Leverages Kubernetes constraints
+ **Clear Multi-Tenancy**: Namespace as tenant boundary
+ **Predictable Behavior**: Always know what to expect
+ **Simplified Management**: Easy to understand and operate
+ **No Collision Risk**: Impossible to have identity conflicts
+ **Kubernetes-Native**: Aligns with platform philosophy
 
 This design makes VolSync's Kopia integration robust, predictable, and easy to manage in 
 multi-tenant Kubernetes environments.
