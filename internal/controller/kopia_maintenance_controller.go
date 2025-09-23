@@ -360,8 +360,9 @@ func (r *KopiaMaintenanceController) SetupWithManager(mgr ctrl.Manager) error {
 		r.containerImage = utils.GetDefaultKopiaImage()
 	}
 
-	// Build the controller
+	// Build the controller with a unique name
 	err := ctrl.NewControllerManagedBy(mgr).
+		Named("kopia-maintenance-manager"). // Unique name to avoid conflicts
 		For(&volsyncv1alpha1.ReplicationSource{}).
 		// Watch CronJobs that we manage
 		Watches(&batchv1.CronJob{},

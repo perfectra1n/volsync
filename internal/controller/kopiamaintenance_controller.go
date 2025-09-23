@@ -66,6 +66,7 @@ func (r *KopiaMaintenanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	// Watch KopiaMaintenance resources and CronJobs they own
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("kopiamaintenance"). // Explicit name for the controller
 		For(&volsyncv1alpha1.KopiaMaintenance{}).
 		Owns(&batchv1.CronJob{}).
 		WithOptions(controller.Options{
