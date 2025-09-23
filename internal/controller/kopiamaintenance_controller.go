@@ -49,6 +49,14 @@ const (
 	kopiaMaintenanceFinalizer = "volsync.backube/kopiamaintenance-protection"
 )
 
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // KopiaMaintenanceReconciler reconciles a KopiaMaintenance object
 type KopiaMaintenanceReconciler struct {
 	client.Client
@@ -88,7 +96,7 @@ func (r *KopiaMaintenanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // +kubebuilder:rbac:groups=volsync.backube,resources=kopiamaintenances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=volsync.backube,resources=kopiamaintenances/finalizers,verbs=update
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch
@@ -172,6 +180,17 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Handle scheduled trigger
 	if maintenance.HasScheduleTrigger() {
+		// Check for excessive failures in scheduled maintenance
+		const maxScheduledFailures = 10
+		if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxScheduledFailures {
+			logger.Info("Scheduled maintenance has failed too many times",
+				"failures", maintenance.Status.MaintenanceFailures,
+				"maxFailures", maxScheduledFailures)
+			r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "ExcessiveScheduledFailures",
+				fmt.Sprintf("Scheduled maintenance has failed %d times. Consider checking repository configuration and credentials.",
+					maintenance.Status.MaintenanceFailures))
+		}
+
 		// Ensure the CronJob exists for the repository
 		cronJobName, err := r.ensureCronJob(ctx, maintenance)
 		if err != nil {
@@ -219,6 +238,33 @@ func (r *KopiaMaintenanceReconciler) handleManualTrigger(ctx context.Context, ma
 	}
 
 	logger.Info("Processing manual trigger", "tag", manualTag)
+
+	// Check if we've had too many recent failures
+	// If we've failed 5 times consecutively, wait for user intervention
+	const maxConsecutiveFailures = 5
+	if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxConsecutiveFailures {
+		logger.Error(nil, "Too many consecutive maintenance failures, requires manual intervention",
+			"failures", maintenance.Status.MaintenanceFailures,
+			"maxFailures", maxConsecutiveFailures)
+		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "TooManyFailures",
+			fmt.Sprintf("Maintenance has failed %d times consecutively. Manual intervention required. Reset failures counter or fix underlying issues.",
+				maintenance.Status.MaintenanceFailures))
+
+		// Still mark the manual trigger as processed to avoid infinite retries
+		maintenance.Status.LastManualSync = manualTag
+		if err := r.updateStatusWithError(ctx, maintenance, "",
+			fmt.Errorf("too many consecutive failures (%d)", maintenance.Status.MaintenanceFailures)); err != nil {
+			logger.Error(err, "Failed to update status")
+		}
+
+		// Use exponential backoff for retries: 1min, 2min, 4min, 8min, then cap at 10min
+		backoffMinutes := 1 << min(int(maintenance.Status.MaintenanceFailures-maxConsecutiveFailures), 4)
+		if backoffMinutes > 10 {
+			backoffMinutes = 10
+		}
+		return ctrl.Result{RequeueAfter: time.Duration(backoffMinutes) * time.Minute},
+			fmt.Errorf("too many consecutive maintenance failures")
+	}
 
 	// Create a Job for manual maintenance
 	jobName, err := r.ensureMaintenanceJob(ctx, maintenance)
@@ -390,7 +436,12 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 					Affinity: maintenance.Spec.Affinity,
 				},
 			},
-			BackoffLimit: ptr.To(int32(3)),
+			// Limit retry attempts to prevent infinite pod creation
+			// After 5 failed attempts, the job will be marked as failed
+			BackoffLimit: ptr.To(int32(5)),
+			// Exponential backoff configuration
+			// Starts at 10 seconds and doubles up to 6 times (max ~10 minutes)
+			ActiveDeadlineSeconds: ptr.To(int64(3600)), // Overall timeout of 1 hour
 			TTLSecondsAfterFinished: ptr.To(int32(3600)), // Clean up after 1 hour
 		},
 	}
@@ -659,7 +710,11 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyn
 			FailedJobsHistoryLimit:     ptr.To(int32(1)),
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
-					BackoffLimit: ptr.To(int32(3)),
+					// Limit retry attempts to prevent infinite pod creation
+					// After 5 failed attempts, the job will be marked as failed
+					BackoffLimit: ptr.To(int32(5)),
+					// Overall timeout for the job
+					ActiveDeadlineSeconds: ptr.To(int64(3600)), // 1 hour timeout,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: func() map[string]string {
@@ -811,7 +866,43 @@ func (r *KopiaMaintenanceReconciler) updateStatusWithError(ctx context.Context, 
 			// Check for recent job completions
 			if cronJob.Status.LastSuccessfulTime != nil {
 				maintenance.Status.LastMaintenanceTime = cronJob.Status.LastSuccessfulTime
+				// Reset failure counter on success
 				maintenance.Status.MaintenanceFailures = 0
+			}
+
+			// Check for failed jobs and track consecutive failures
+			jobs := &batchv1.JobList{}
+			if err := r.List(ctx, jobs,
+				client.InNamespace(maintenance.Namespace),
+				client.MatchingLabels{
+					"volsync.backube/kopia-maintenance": "true",
+					"volsync.backube/maintenance-name":  maintenance.Name,
+				}); err == nil {
+				// Count recent failed jobs (within last 24 hours)
+				recentFailures := int32(0)
+				cutoffTime := time.Now().Add(-24 * time.Hour)
+				for _, job := range jobs.Items {
+					if job.CreationTimestamp.After(cutoffTime) {
+						// Check if job has failed (exceeded backoff limit)
+						if job.Status.Failed > 0 && job.Status.Conditions != nil {
+							for _, condition := range job.Status.Conditions {
+								if condition.Type == batchv1.JobFailed &&
+								   condition.Status == corev1.ConditionTrue &&
+								   (condition.Reason == "BackoffLimitExceeded" || condition.Reason == "DeadlineExceeded") {
+									recentFailures++
+									break
+								}
+							}
+						}
+					}
+				}
+
+				// Update failure count if we have recent failures and no recent success
+				if recentFailures > 0 && (cronJob.Status.LastSuccessfulTime == nil ||
+					cronJob.Status.LastSuccessfulTime.Before(&metav1.Time{Time: cutoffTime})) {
+					maintenance.Status.MaintenanceFailures = recentFailures
+					r.Log.V(1).Info("Detected recent maintenance failures", "failures", recentFailures)
+				}
 			}
 		}
 	}
@@ -888,6 +979,27 @@ func (r *KopiaMaintenanceReconciler) updateConditions(maintenance *volsyncv1alph
 		readyCondition.Status = metav1.ConditionFalse
 		readyCondition.Reason = "CronJobCreationFailed"
 		readyCondition.Message = "Failed to create maintenance CronJob"
+	}
+
+	// Add a condition for excessive failures
+	if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= 5 {
+		failureCondition := metav1.Condition{
+			Type:               "MaintenanceHealthy",
+			ObservedGeneration: maintenance.Generation,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExcessiveFailures",
+			Message:            fmt.Sprintf("Maintenance has failed %d times. Manual intervention may be required.", maintenance.Status.MaintenanceFailures),
+		}
+		apimeta.SetStatusCondition(&maintenance.Status.Conditions, failureCondition)
+	} else {
+		healthyCondition := metav1.Condition{
+			Type:               "MaintenanceHealthy",
+			ObservedGeneration: maintenance.Generation,
+			Status:             metav1.ConditionTrue,
+			Reason:             "OperatingNormally",
+			Message:            "Maintenance is operating normally",
+		}
+		apimeta.SetStatusCondition(&maintenance.Status.Conditions, healthyCondition)
 	}
 
 	// Use apimeta.SetStatusCondition for proper condition management
