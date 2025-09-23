@@ -21,6 +21,7 @@ KopiaMaintenance is a Kubernetes custom resource that manages automated maintena
 - Repository compaction and optimization
 - Index maintenance for improved performance
 - Verification of repository integrity
+- Automatic maintenance ownership management
 
 Key Features
 ------------
@@ -315,6 +316,16 @@ Resource Allocation
 2. **Monitor maintenance jobs**: Check job completion times and resource consumption
 3. **Scale for repository size**: Larger repositories require more memory and CPU
 4. **Use node affinity**: Direct maintenance to appropriate nodes for large-scale operations
+
+Maintenance Ownership
+---------------------
+
+Kopia requires a single user to own maintenance operations. KopiaMaintenance automatically:
+
+1. **Sets identity**: Uses ``maintenance@volsync`` as the maintenance identity
+2. **Claims ownership**: Automatically claims or reclaims maintenance ownership
+3. **Handles conflicts**: Retries if another user currently owns maintenance
+4. **Ensures reliability**: Prevents maintenance failures due to ownership issues
 
 Naming Conventions
 ------------------

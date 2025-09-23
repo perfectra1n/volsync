@@ -70,7 +70,7 @@ VolSync automatically:
 4. **Manages secret lifecycle** - updates copied secrets when source changes,
    cleans up when no longer needed
 5. **Runs maintenance with username** ``maintenance@volsync`` to distinguish
-   from backup operations
+   from backup operations, with automatic ownership enforcement
 6. **Handles schedule conflicts** - uses first-wins strategy when the same
    repository has different schedules
 
@@ -214,6 +214,20 @@ During migration, both approaches can coexist:
 .. warning::
    ``maintenanceIntervalDays`` is deprecated and will be removed in a future version.
    Migrate to ``maintenanceCronJob`` for new features and continued support.
+
+Maintenance Ownership
+=====================
+
+Kopia requires a single user to "own" maintenance operations for each repository.
+VolSync automatically manages this ownership:
+
+- **Maintenance Identity**: All maintenance operations use ``maintenance@volsync`` as the client identity
+- **Ownership Enforcement**: The maintenance CronJob automatically claims ownership before running maintenance
+- **Conflict Handling**: If another user owns maintenance, the job will retry based on CronJob configuration
+- **Automatic Recovery**: Ownership is reclaimed if the previous owner is no longer active
+
+This ensures reliable maintenance operations even in multi-tenant environments where
+multiple namespaces share the same Kopia repository.
 
 Common Configurations
 =====================
