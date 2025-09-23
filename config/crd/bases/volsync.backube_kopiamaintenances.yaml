@@ -1008,7 +1008,10 @@ spec:
               nodeSelector:
                 additionalProperties:
                   type: string
-                description: NodeSelector for maintenance pods.
+                description: |-
+                  NodeSelector for maintenance pods.
+                  NOTE: This field is preserved for future implementation. Currently, NodeSelector is not
+                  directly supported by the Kopia mover spec and will be ignored.
                 type: object
               repository:
                 description: |-
@@ -1040,6 +1043,7 @@ spec:
                       This secret should contain the repository connection details (URL, credentials, etc.)
                       in the same format as used by ReplicationSources.
                       The secret must exist in the same namespace as the KopiaMaintenance resource.
+                    minLength: 1
                     type: string
                   repositoryType:
                     description: |-
@@ -1138,7 +1142,10 @@ spec:
                   to complete.
                 type: boolean
               tolerations:
-                description: Tolerations for maintenance pods.
+                description: |-
+                  Tolerations for maintenance pods.
+                  NOTE: This field is preserved for future implementation. Currently, Tolerations are not
+                  directly supported by the Kopia mover spec and will be ignored.
                 items:
                   description: |-
                     The pod this Toleration is attached to tolerates any taint that matches
@@ -1267,6 +1274,11 @@ spec:
                   time.
                 format: date-time
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
             type: object
         type: object
     served: true

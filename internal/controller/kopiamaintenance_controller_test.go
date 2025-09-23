@@ -104,7 +104,7 @@ func TestKopiaMaintenanceReconciler_SetupWithManager(t *testing.T) {
 	}
 }
 
-func TestKopiaMaintenanceReconciler_updateStatus(t *testing.T) {
+func TestKopiaMaintenanceReconciler_updateStatusWithError(t *testing.T) {
 	// Setup the scheme
 	s := runtime.NewScheme()
 	_ = corev1.AddToScheme(s)
@@ -170,9 +170,9 @@ func TestKopiaMaintenanceReconciler_updateStatus(t *testing.T) {
 				EventRecorder: &record.FakeRecorder{},
 			}
 
-			err := r.updateStatus(context.Background(), tt.maintenance, tt.activeCronJob)
+			err := r.updateStatusWithError(context.Background(), tt.maintenance, tt.activeCronJob, nil)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("updateStatus() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("updateStatusWithError() error = %v, wantErr %v", err, tt.wantErr)
 			}
 
 			// Verify status was initialized if it was nil

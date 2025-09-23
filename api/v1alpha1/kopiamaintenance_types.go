@@ -36,8 +36,11 @@ package v1alpha1
 
 import (
 	"fmt"
+	"strings"
 
+	cron "github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -137,6 +140,10 @@ type KopiaRepositorySpec struct {
 
 // KopiaMaintenanceStatus defines the observed state of KopiaMaintenance
 type KopiaMaintenanceStatus struct {
+	// ObservedGeneration is the most recent generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// ActiveCronJob is the name of the CronJob currently managed by this maintenance configuration.
 	// +optional
 	ActiveCronJob string `json:"activeCronJob,omitempty"`
@@ -224,7 +231,112 @@ func (km *KopiaMaintenance) Validate() error {
 		return fmt.Errorf("repository.repository field is required")
 	}
 
+	// Validate cron schedule format
+	if km.Spec.Schedule != "" {
+		// Parse the cron schedule to validate format
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		if _, err := parser.Parse(km.Spec.Schedule); err != nil {
+			return fmt.Errorf("invalid cron schedule format: %w", err)
+		}
+	}
+
+	// Validate resource requirements if specified
+	if km.Spec.Resources != nil {
+		if err := validateResourceRequirements(km.Spec.Resources); err != nil {
+			return fmt.Errorf("invalid resource requirements: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// validateResourceRequirements validates resource requirements
+func validateResourceRequirements(resources *corev1.ResourceRequirements) error {
+	// Check memory limits and requests
+	if resources.Limits != nil {
+		if memLimit, ok := resources.Limits[corev1.ResourceMemory]; ok {
+			if memLimit.Sign() <= 0 {
+				return fmt.Errorf("memory limit must be positive")
+			}
+			// Check for reasonable maximum (e.g., 100Gi)
+			maxMemory := resource.MustParse("100Gi")
+			if memLimit.Cmp(maxMemory) > 0 {
+				return fmt.Errorf("memory limit exceeds maximum allowed (100Gi)")
+			}
+		}
+		if cpuLimit, ok := resources.Limits[corev1.ResourceCPU]; ok {
+			if cpuLimit.Sign() <= 0 {
+				return fmt.Errorf("CPU limit must be positive")
+			}
+			// Check for reasonable maximum (e.g., 32 cores)
+			maxCPU := resource.MustParse("32")
+			if cpuLimit.Cmp(maxCPU) > 0 {
+				return fmt.Errorf("CPU limit exceeds maximum allowed (32 cores)")
+			}
+		}
+	}
+
+	if resources.Requests != nil {
+		if memRequest, ok := resources.Requests[corev1.ResourceMemory]; ok {
+			if memRequest.Sign() <= 0 {
+				return fmt.Errorf("memory request must be positive")
+			}
+			// If limit is set, request must not exceed limit
+			if resources.Limits != nil {
+				if memLimit, hasLimit := resources.Limits[corev1.ResourceMemory]; hasLimit {
+					if memRequest.Cmp(memLimit) > 0 {
+						return fmt.Errorf("memory request exceeds memory limit")
+					}
+				}
+			}
+		}
+		if cpuRequest, ok := resources.Requests[corev1.ResourceCPU]; ok {
+			if cpuRequest.Sign() <= 0 {
+				return fmt.Errorf("CPU request must be positive")
+			}
+			// If limit is set, request must not exceed limit
+			if resources.Limits != nil {
+				if cpuLimit, hasLimit := resources.Limits[corev1.ResourceCPU]; hasLimit {
+					if cpuRequest.Cmp(cpuLimit) > 0 {
+						return fmt.Errorf("CPU request exceeds CPU limit")
+					}
+				}
+			}
+		}
+	}
+
+	// Validate that only standard resources are specified
+	for resourceName := range resources.Limits {
+		if !isStandardResourceName(string(resourceName)) {
+			return fmt.Errorf("unsupported resource limit: %s", resourceName)
+		}
+	}
+	for resourceName := range resources.Requests {
+		if !isStandardResourceName(string(resourceName)) {
+			return fmt.Errorf("unsupported resource request: %s", resourceName)
+		}
+	}
+
+	return nil
+}
+
+// isStandardResourceName checks if the resource name is a standard Kubernetes resource
+func isStandardResourceName(name string) bool {
+	standardResources := []string{
+		string(corev1.ResourceCPU),
+		string(corev1.ResourceMemory),
+		string(corev1.ResourceEphemeralStorage),
+	}
+	for _, std := range standardResources {
+		if name == std {
+			return true
+		}
+	}
+	// Also allow hugepages resources
+	if strings.HasPrefix(name, "hugepages-") {
+		return true
+	}
+	return false
 }
 
 func init() {

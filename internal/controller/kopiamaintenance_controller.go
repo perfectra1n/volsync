@@ -28,6 +28,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,10 +36,16 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	"github.com/backube/volsync/internal/controller/mover/kopia"
 	"github.com/backube/volsync/internal/controller/utils"
+)
+
+const (
+	// kopiaMaintenanceFinalizer is the finalizer added to KopiaMaintenance resources
+	kopiaMaintenanceFinalizer = "volsync.backube/kopiamaintenance-protection"
 )
 
 // KopiaMaintenanceReconciler reconciles a KopiaMaintenance object
@@ -98,7 +105,43 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := maintenance.Validate(); err != nil {
 		logger.Error(err, "Invalid KopiaMaintenance configuration")
 		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "ValidationFailed", err.Error())
-		return ctrl.Result{}, r.updateStatus(ctx, maintenance, "")
+		if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after validation failure")
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Check if the object is being deleted
+	if !maintenance.DeletionTimestamp.IsZero() {
+		// Handle deletion
+		if controllerutil.ContainsFinalizer(maintenance, kopiaMaintenanceFinalizer) {
+			logger.Info("Handling deletion")
+			// Clean up any existing CronJobs
+			if err := r.cleanupCronJob(ctx, maintenance); err != nil {
+				logger.Error(err, "Failed to cleanup CronJob during deletion")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+			}
+
+			// Remove the finalizer
+			controllerutil.RemoveFinalizer(maintenance, kopiaMaintenanceFinalizer)
+			if err := r.Update(ctx, maintenance); err != nil {
+				logger.Error(err, "Failed to remove finalizer")
+				return ctrl.Result{}, err
+			}
+			logger.Info("Successfully removed finalizer")
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(maintenance, kopiaMaintenanceFinalizer) {
+		controllerutil.AddFinalizer(maintenance, kopiaMaintenanceFinalizer)
+		if err := r.Update(ctx, maintenance); err != nil {
+			logger.Error(err, "Failed to add finalizer")
+			return ctrl.Result{}, err
+		}
+		logger.V(1).Info("Added finalizer")
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Check if maintenance is enabled
@@ -109,7 +152,7 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			logger.Error(err, "Failed to cleanup CronJob")
 			return ctrl.Result{RequeueAfter: time.Minute}, err
 		}
-		return ctrl.Result{}, r.updateStatus(ctx, maintenance, "")
+		return ctrl.Result{}, r.updateStatusWithError(ctx, maintenance, "", nil)
 	}
 
 	// Ensure the CronJob exists for the repository
@@ -118,11 +161,15 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		logger.Error(err, "Failed to ensure CronJob")
 		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "CronJobFailed",
 			fmt.Sprintf("Failed to ensure CronJob: %v", err))
+		// Update status with error
+		if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: time.Minute}, err
 	}
 
 	// Update status
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, r.updateStatus(ctx, maintenance, cronJobName)
+	return ctrl.Result{RequeueAfter: 5 * time.Minute}, r.updateStatusWithError(ctx, maintenance, cronJobName, nil)
 }
 
 // ensureCronJob creates or updates a CronJob for the KopiaMaintenance
@@ -210,14 +257,14 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s", maintenance.Namespace, maintenance.Name)))
 
 	// Kubernetes names have a 63 character limit
-	// "kopia-maint-" is 12 chars, hash suffix is 8 chars (4 bytes in hex), plus 1 for hyphen = 21 chars overhead
-	// This leaves 42 chars for the maintenance name
-	maxNameLength := 42
+	// "kopia-maint-" is 12 chars, hash suffix is 16 chars (8 bytes in hex), plus 1 for hyphen = 29 chars overhead
+	// This leaves 34 chars for the maintenance name
+	maxNameLength := 34
 	truncatedName := maintenance.Name
 	if len(truncatedName) > maxNameLength {
 		truncatedName = truncatedName[:maxNameLength]
 	}
-	cronJobName := fmt.Sprintf("kopia-maint-%s-%x", truncatedName, hash[:4])
+	cronJobName := fmt.Sprintf("kopia-maint-%s-%x", truncatedName, hash[:8])
 
 	return cronJobName, nil
 }
@@ -229,12 +276,12 @@ func (r *KopiaMaintenanceReconciler) cleanupCronJob(ctx context.Context, mainten
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s", maintenance.Namespace, maintenance.Name)))
 
 	// Use same truncation logic as in ensureCronJob
-	maxNameLength := 42
+	maxNameLength := 34
 	truncatedName := maintenance.Name
 	if len(truncatedName) > maxNameLength {
 		truncatedName = truncatedName[:maxNameLength]
 	}
-	cronJobName := fmt.Sprintf("kopia-maint-%s-%x", truncatedName, hash[:4])
+	cronJobName := fmt.Sprintf("kopia-maint-%s-%x", truncatedName, hash[:8])
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cronJobName,
@@ -249,14 +296,20 @@ func (r *KopiaMaintenanceReconciler) cleanupCronJob(ctx context.Context, mainten
 	return nil
 }
 
-// updateStatus updates the KopiaMaintenance status
-func (r *KopiaMaintenanceReconciler) updateStatus(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance, activeCronJob string) error {
+// updateStatusWithError updates the KopiaMaintenance status including error conditions
+func (r *KopiaMaintenanceReconciler) updateStatusWithError(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance, activeCronJob string, reconcileErr error) error {
+	// Get the latest version of the resource
+	original := maintenance.DeepCopy()
+
 	// Ensure status is initialized
 	if maintenance.Status == nil {
 		maintenance.Status = &volsyncv1alpha1.KopiaMaintenanceStatus{
 			Conditions: []metav1.Condition{},
 		}
 	}
+
+	// Update ObservedGeneration
+	maintenance.Status.ObservedGeneration = maintenance.Generation
 
 	// Update active CronJob
 	maintenance.Status.ActiveCronJob = activeCronJob
@@ -294,28 +347,65 @@ func (r *KopiaMaintenanceReconciler) updateStatus(ctx context.Context, maintenan
 	}
 
 	// Update conditions
-	r.updateConditions(maintenance, activeCronJob)
+	r.updateConditions(maintenance, activeCronJob, reconcileErr)
 
-	// Update status with error handling
-	if err := r.Status().Update(ctx, maintenance); err != nil {
-		r.Log.Error(err, "Failed to update KopiaMaintenance status",
+	// Use Patch instead of Update for status
+	patch := client.MergeFrom(original)
+	if err := r.Status().Patch(ctx, maintenance, patch); err != nil {
+		r.Log.Error(err, "Failed to patch KopiaMaintenance status",
 			"namespace", maintenance.Namespace, "name", maintenance.Name)
-		return fmt.Errorf("failed to update status: %w", err)
+		return fmt.Errorf("failed to patch status: %w", err)
 	}
 
 	return nil
 }
 
 // updateConditions updates the status conditions
-func (r *KopiaMaintenanceReconciler) updateConditions(maintenance *volsyncv1alpha1.KopiaMaintenance, activeCronJob string) {
+func (r *KopiaMaintenanceReconciler) updateConditions(maintenance *volsyncv1alpha1.KopiaMaintenance, activeCronJob string, reconcileErr error) {
+	// Progressing condition - follows Kubernetes deployment/statefulset pattern
+	progressingCondition := metav1.Condition{
+		Type:               "Progressing",
+		ObservedGeneration: maintenance.Generation,
+	}
+
+	if reconcileErr != nil {
+		// If there's an error, we're still progressing (retrying)
+		progressingCondition.Status = metav1.ConditionTrue
+		progressingCondition.Reason = "ReconcileError"
+		progressingCondition.Message = fmt.Sprintf("Reconciliation in progress, error: %v", reconcileErr)
+	} else if maintenance.Status.ObservedGeneration < maintenance.Generation {
+		// New generation observed, processing update
+		progressingCondition.Status = metav1.ConditionTrue
+		progressingCondition.Reason = "NewGenerationObserved"
+		progressingCondition.Message = "Processing spec update"
+	} else if !maintenance.GetEnabled() {
+		// Disabled state is stable, not progressing
+		progressingCondition.Status = metav1.ConditionFalse
+		progressingCondition.Reason = "MaintenanceDisabled"
+		progressingCondition.Message = "Maintenance is disabled"
+	} else if activeCronJob != "" {
+		// Successfully created/updated, stable state
+		progressingCondition.Status = metav1.ConditionFalse
+		progressingCondition.Reason = "ReconcileComplete"
+		progressingCondition.Message = "CronJob successfully configured"
+	} else {
+		// Still trying to create CronJob
+		progressingCondition.Status = metav1.ConditionTrue
+		progressingCondition.Reason = "CreatingCronJob"
+		progressingCondition.Message = "Creating maintenance CronJob"
+	}
+
 	// Ready condition
 	readyCondition := metav1.Condition{
 		Type:               "Ready",
 		ObservedGeneration: maintenance.Generation,
-		LastTransitionTime: metav1.Now(),
 	}
 
-	if !maintenance.GetEnabled() {
+	if reconcileErr != nil {
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = "ReconcileFailed"
+		readyCondition.Message = fmt.Sprintf("Reconcile failed: %v", reconcileErr)
+	} else if !maintenance.GetEnabled() {
 		readyCondition.Status = metav1.ConditionFalse
 		readyCondition.Reason = "MaintenanceDisabled"
 		readyCondition.Message = "Maintenance is disabled"
@@ -330,18 +420,9 @@ func (r *KopiaMaintenanceReconciler) updateConditions(maintenance *volsyncv1alph
 		readyCondition.Message = "Failed to create maintenance CronJob"
 	}
 
-	// Update or append the condition
-	found := false
-	for i, condition := range maintenance.Status.Conditions {
-		if condition.Type == readyCondition.Type {
-			maintenance.Status.Conditions[i] = readyCondition
-			found = true
-			break
-		}
-	}
-	if !found {
-		maintenance.Status.Conditions = append(maintenance.Status.Conditions, readyCondition)
-	}
+	// Use apimeta.SetStatusCondition for proper condition management
+	apimeta.SetStatusCondition(&maintenance.Status.Conditions, progressingCondition)
+	apimeta.SetStatusCondition(&maintenance.Status.Conditions, readyCondition)
 }
 
 // calculateNextScheduledTime calculates the next scheduled time based on the cron expression
