@@ -12,22 +12,21 @@ spec:
     listKind: KopiaMaintenanceList
     plural: kopiamaintenances
     singular: kopiamaintenance
-  scope: Cluster
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.repository.repository
+      name: Repository
+      type: string
     - jsonPath: .spec.enabled
       name: Enabled
       type: boolean
     - jsonPath: .spec.schedule
       name: Schedule
       type: string
-    - jsonPath: .spec.priority
-      name: Priority
-      type: integer
-    - description: Number of matched sources
-      jsonPath: .status.matchedSources[*]
-      name: Matched
-      type: integer
+    - jsonPath: .spec.suspend
+      name: Suspended
+      type: boolean
     - format: date-time
       jsonPath: .status.lastMaintenanceTime
       name: Last Maintenance
@@ -40,8 +39,8 @@ spec:
       openAPIV3Schema:
         description: |-
           KopiaMaintenance is a VolSync resource that defines maintenance configuration
-          for Kopia repositories. It matches ReplicationSources based on repository
-          configuration and schedules maintenance operations.
+          for Kopia repositories. It manages repository maintenance operations
+          on a defined schedule.
         properties:
           apiVersion:
             description: |-
@@ -1011,21 +1010,10 @@ spec:
                   type: string
                 description: NodeSelector for maintenance pods.
                 type: object
-              priority:
-                default: 0
-                description: |-
-                  Priority defines the priority of this maintenance configuration.
-                  When multiple KopiaMaintenance resources match the same repository,
-                  the one with the highest priority wins. Default is 0.
-                format: int32
-                maximum: 100
-                minimum: -100
-                type: integer
               repository:
                 description: |-
-                  Repository defines a direct repository configuration for maintenance.
-                  This approach allows KopiaMaintenance to work independently of ReplicationSources.
-                  Either RepositorySelector OR Repository must be specified, but not both.
+                  Repository defines the repository configuration for maintenance.
+                  The repository secret must exist in the same namespace as the KopiaMaintenance resource.
                 properties:
                   customCA:
                     description: CustomCA is optional custom CA configuration for
@@ -1046,16 +1034,12 @@ spec:
                           If SecretName is used then ConfigMapName should not be set
                         type: string
                     type: object
-                  namespace:
-                    description: |-
-                      Namespace where the repository secret is located.
-                      If not specified, defaults to the VolSync operator namespace.
-                    type: string
                   repository:
                     description: |-
                       Repository is the secret name containing repository configuration.
                       This secret should contain the repository connection details (URL, credentials, etc.)
                       in the same format as used by ReplicationSources.
+                      The secret must exist in the same namespace as the KopiaMaintenance resource.
                     type: string
                   repositoryType:
                     description: |-
@@ -1064,66 +1048,6 @@ spec:
                     type: string
                 required:
                 - repository
-                type: object
-              repositorySelector:
-                description: |-
-                  Repository matching configuration for finding existing ReplicationSources.
-                  This approach matches existing ReplicationSources by their repository configuration.
-                  Either RepositorySelector OR Repository must be specified, but not both.
-                properties:
-                  customCA:
-                    description: CustomCA matches repositories using specific custom
-                      CA configuration.
-                    properties:
-                      configMapName:
-                        description: |-
-                          ConfigMapName matches repositories using this CA ConfigMap name.
-                          Can use wildcards.
-                        type: string
-                      secretName:
-                        description: |-
-                          SecretName matches repositories using this CA secret name.
-                          Can use wildcards.
-                        type: string
-                    type: object
-                  labels:
-                    additionalProperties:
-                      type: string
-                    description: Labels matches ReplicationSources with specific labels.
-                    type: object
-                  namespaceSelector:
-                    description: |-
-                      NamespaceSelector defines which namespaces to match.
-                      If not specified, matches all namespaces.
-                    properties:
-                      excludeNames:
-                        description: ExcludeNames lists namespace names to exclude.
-                        items:
-                          type: string
-                        type: array
-                      matchLabels:
-                        additionalProperties:
-                          type: string
-                        description: MatchLabels matches namespaces by their labels.
-                        type: object
-                      matchNames:
-                        description: MatchNames lists specific namespace names to
-                          match.
-                        items:
-                          type: string
-                        type: array
-                    type: object
-                  repository:
-                    description: |-
-                      Repository is the name of the repository secret to match.
-                      Can use wildcards (* for any characters, ? for single character).
-                      Examples: "kopia-*", "backup-?-repo", "prod-*-backup"
-                    type: string
-                  repositoryType:
-                    description: |-
-                      RepositoryType matches specific repository types (e.g., "s3", "azure", "gcs", "filesystem").
-                      If not specified, matches all types.
-                    type: string
                 type: object
               resources:
                 description: |-
@@ -1252,18 +1176,18 @@ spec:
                       type: string
                   type: object
                 type: array
+            required:
+            - repository
             type: object
           status:
             description: |-
               status is the observed state of the KopiaMaintenance as determined by
               the controller.
             properties:
-              activeCronJobs:
-                description: ActiveCronJobs lists the CronJobs currently managed by
-                  this maintenance configuration.
-                items:
-                  type: string
-                type: array
+              activeCronJob:
+                description: ActiveCronJob is the name of the CronJob currently managed
+                  by this maintenance configuration.
+                type: string
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the
@@ -1323,13 +1247,6 @@ spec:
                   - type
                   type: object
                 type: array
-              conflictingMaintenances:
-                description: |-
-                  ConflictingMaintenances lists other KopiaMaintenance resources that match
-                  the same repositories but have lower priority.
-                items:
-                  type: string
-                type: array
               lastMaintenanceTime:
                 description: LastMaintenanceTime is the last time maintenance was
                   successfully performed.
@@ -1345,32 +1262,6 @@ spec:
                   maintenance failures.
                 format: int32
                 type: integer
-              matchedSources:
-                description: MatchedSources lists the ReplicationSources currently
-                  matched by this maintenance configuration.
-                items:
-                  description: MatchedSource represents a ReplicationSource matched
-                    by this maintenance configuration
-                  properties:
-                    lastMatched:
-                      description: LastMatched is when this source was last matched
-                      format: date-time
-                      type: string
-                    name:
-                      description: Name is the name of the ReplicationSource
-                      type: string
-                    namespace:
-                      description: Namespace is the namespace of the ReplicationSource
-                      type: string
-                    repository:
-                      description: Repository is the repository being used
-                      type: string
-                  required:
-                  - name
-                  - namespace
-                  - repository
-                  type: object
-                type: array
               nextScheduledMaintenance:
                 description: NextScheduledMaintenance is the next scheduled maintenance
                   time.
