@@ -235,6 +235,32 @@ rules:
 - apiGroups:
   - volsync.backube
   resources:
+  - kopiamaintenances
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - volsync.backube
+  resources:
+  - kopiamaintenances/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - volsync.backube
+  resources:
+  - kopiamaintenances/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - volsync.backube
+  resources:
   - replicationdestinations
   verbs:
   - create
