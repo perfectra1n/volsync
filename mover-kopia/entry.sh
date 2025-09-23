@@ -412,36 +412,17 @@ function set_client_identity {
     # Execute the set-client command if we need to set identity
     if [[ "${should_set_identity}" == "true" ]]; then
         log_info "Applying client identity configuration..."
-        log_info "DEBUG: set_client_identity details:"
-        log_info "  should_set_identity=${should_set_identity}"
-        log_info "  username=${username}"
-        log_info "  hostname=${hostname}"
-
         local SET_CLIENT_CMD=("${KOPIA[@]}" repository set-client)
 
         if [[ -n "${username}" ]]; then
             SET_CLIENT_CMD+=("--username=${username}")
-            log_info "  Adding --username=${username} to command"
-        else
-            log_info "  WARNING: username is empty, not adding to command"
         fi
 
         if [[ -n "${hostname}" ]]; then
             SET_CLIENT_CMD+=("--hostname=${hostname}")
-            log_info "  Adding --hostname=${hostname} to command"
-        else
-            log_info "  WARNING: hostname is empty, not adding to command"
-        fi
 
-        log_info "DEBUG: Full set-client command: ${SET_CLIENT_CMD[*]}"
-
-        log_info "Executing set-client command..."
         if "${SET_CLIENT_CMD[@]}" 2>&1; then
             log_info "✓ Client identity set successfully to ${username}@${hostname}"
-
-            # Verify it was actually set
-            log_info "DEBUG: Verifying identity was actually changed..."
-            "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || log_info "  Could not verify identity"
         else
             local exit_code=$?
             log_error "✗ Failed to set client identity (exit code: ${exit_code})"
@@ -451,12 +432,7 @@ function set_client_identity {
             echo "Warning: Client identity could not be set. Maintenance may fail due to ownership mismatch."
         fi
     else
-        log_info "NOT setting client identity (should_set_identity=${should_set_identity})"
-        log_info "DEBUG: Why not setting identity:"
-        log_info "  DIRECTION=${DIRECTION}"
-        log_info "  In maintenance mode: $([[ "${DIRECTION}" == "maintenance" ]] && echo "yes" || echo "no")"
-        log_info "  Username would be: ${username:-[empty]}"
-        log_info "  Hostname would be: ${hostname:-[empty]}"
+        log_info "Skipping client identity configuration"
     fi
 }
 
@@ -1594,10 +1570,8 @@ function ensure_maintenance_ownership {
     fi
 
     # Check current maintenance owner
-    log_info "Checking current maintenance owner..."
     local maintenance_info
     if maintenance_info=$("${KOPIA[@]}" maintenance info 2>&1); then
-        log_info "Current maintenance info: ${maintenance_info}"
 
         # Check if we're already the owner
         if echo "${maintenance_info}" | grep -q "Owner:.*${expected_owner}"; then
@@ -1616,8 +1590,7 @@ function ensure_maintenance_ownership {
             return 1
         fi
     else
-        log_warn "Could not retrieve maintenance info: ${maintenance_info}"
-        log_info "Attempting to set maintenance owner anyway..."
+        log_warn "Could not retrieve maintenance info"
 
         # Try to set ownership even if info command failed
         if "${KOPIA[@]}" maintenance set --owner="${expected_owner}" 2>&1; then
@@ -1634,60 +1607,24 @@ function do_maintenance {
     log_info "=== Starting maintenance operation ==="
     local maint_start_time=$(date +%s)
 
-    # Debug: Check environment variables
-    log_info "DEBUG: Environment check before maintenance:"
-    log_info "  DIRECTION=${DIRECTION}"
-    log_info "  KOPIA_OVERRIDE_MAINTENANCE_USERNAME=${KOPIA_OVERRIDE_MAINTENANCE_USERNAME:-[not set]}"
-    log_info "  KOPIA_OVERRIDE_USERNAME=${KOPIA_OVERRIDE_USERNAME:-[not set]}"
-    log_info "  KOPIA_OVERRIDE_HOSTNAME=${KOPIA_OVERRIDE_HOSTNAME:-[not set]}"
-    log_info "  USER=${USER}"
-    log_info "  HOSTNAME=${HOSTNAME}"
-
-    # Check current identity BEFORE setting
-    log_info "DEBUG: Current Kopia identity BEFORE set_client_identity:"
-    "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || log_info "  Could not extract identity from repository status"
-
-    # CRITICAL: Set client identity right before maintenance
-    # This ensures we're using the correct identity (maintenance@volsync) when running maintenance
-    log_info "Setting client identity before maintenance..."
+    # Set client identity for maintenance
+    log_info "Setting client identity for maintenance..."
     set_client_identity
-
-    # Verify the identity is set correctly
-    log_info "DEBUG: Current Kopia identity AFTER set_client_identity:"
-    "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || log_info "  Could not extract identity from repository status"
-
-    # Let's also check what maintenance info shows about the current user
-    log_info "DEBUG: Checking maintenance info before ownership check:"
-    "${KOPIA[@]}" maintenance info 2>&1 | head -20 || log_info "  Could not get maintenance info"
 
     # Ensure we have maintenance ownership before running maintenance
     ensure_maintenance_ownership
 
-    # Check maintenance info again after ownership
-    log_info "DEBUG: Checking maintenance info after ownership check:"
-    "${KOPIA[@]}" maintenance info 2>&1 | grep -E "Owner|owner" || log_info "  Could not extract owner from maintenance info"
 
     # Log repository health before maintenance
     log_repository_health "before_maintenance"
 
     # Run maintenance with proper error handling
     log_info "Running full maintenance cycle..."
-    log_info "DEBUG: About to run maintenance command:"
-    log_info "  Command: ${KOPIA[*]} maintenance run --full"
-    log_info "  Current USER env var: ${USER}"
-    log_info "  Current HOSTNAME env var: ${HOSTNAME}"
 
     local maint_exit_code=0
     if ! "${KOPIA[@]}" maintenance run --full 2>&1; then
         maint_exit_code=$?
         log_error "Maintenance operation failed with exit code: ${maint_exit_code}"
-
-        # Extra debug on failure
-        log_info "DEBUG: Maintenance failed, checking current state:"
-        log_info "  Current identity:"
-        "${KOPIA[@]}" repository status 2>&1 | grep -E "Username|Hostname|User|Host" || true
-        log_info "  Maintenance owner:"
-        "${KOPIA[@]}" maintenance info 2>&1 | grep -E "Owner|owner" || true
 
         # For dedicated maintenance mode, we should fail to trigger CronJob retry logic
         if [[ "${DIRECTION}" == "maintenance" ]]; then

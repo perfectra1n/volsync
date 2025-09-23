@@ -166,6 +166,7 @@ rules:
 - apiGroups:
   - volsync.backube
   resources:
+  - kopiamaintenances
   - replicationdestinations
   - replicationsources
   verbs:
@@ -179,6 +180,13 @@ rules:
 - apiGroups:
   - volsync.backube
   resources:
+  - kopiamaintenances/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - volsync.backube
+  resources:
+  - kopiamaintenances/status
   - replicationdestinations/status
   - replicationsources/status
   verbs:
