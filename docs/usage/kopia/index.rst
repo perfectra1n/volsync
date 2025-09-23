@@ -13,10 +13,8 @@ Kopia-based backup
    backup-configuration
    restore-configuration
    cross-namespace-restore
-   maintenance-cronjobs
    kopiamaintenance
    kopia-maintenance-crd
-   maintenance-schedule-conflicts
    additional-args
    troubleshooting
    custom-ca
@@ -218,10 +216,6 @@ Here's a complete example showing how to set up a basic Kopia backup:
          weekly: 4       # Keep 4 weekly snapshots
          monthly: 12     # Keep 12 monthly snapshots
        compression: "zstd"  # Use zstd compression
-       # Optional: Configure maintenance CronJob (enabled by default)
-       maintenanceCronJob:
-         enabled: true
-         schedule: "0 3 * * *"  # Maintenance at 3 AM (after backups)
 
 **Step 3: Restore when needed**
 

@@ -38,20 +38,6 @@ kopia:
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
-  # Configuration for Kopia maintenance CronJobs
-  maintenanceCronJob:
-    # Whether maintenance CronJobs are enabled by default
-    enabled: true
-    # Default cron schedule for maintenance (daily at 2 AM)
-    defaultSchedule: "0 2 * * *"
-    # Resource requests/limits for maintenance jobs
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 1000m
-        memory: 1Gi
 kube-rbac-proxy:
   repository: quay.io/brancz/kube-rbac-proxy
   tag: "v0.19.0"
