@@ -54,7 +54,7 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 		manager = NewMaintenanceManager(client, logger, "quay.io/backube/volsync-kopia:latest")
 
 		// Create a test ReplicationSource
-		enabled := true
+		// enabled := true // Field removed
 		source = &volsyncv1alpha1.ReplicationSource{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-source",
@@ -63,10 +63,7 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 			Spec: volsyncv1alpha1.ReplicationSourceSpec{
 				Kopia: &volsyncv1alpha1.ReplicationSourceKopiaSpec{
 					Repository: "test-repo-secret",
-					MaintenanceCronJob: &volsyncv1alpha1.MaintenanceCronJobSpec{
-						Enabled:  &enabled,
-						Schedule: "0 2 * * *",
-					},
+					// MaintenanceCronJob removed - use KopiaMaintenance CRD
 				},
 			},
 		}

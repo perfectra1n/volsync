@@ -187,7 +187,7 @@ func TestMaintenanceManager(t *testing.T) {
 		manager := NewMaintenanceManager(client, logger, "test-image:latest")
 
 		// Create a test ReplicationSource with maintenance disabled
-		maintenanceInterval := int32(0)
+		// maintenanceInterval := int32(0) // Field removed
 		source := &volsyncv1alpha1.ReplicationSource{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-source",
@@ -196,8 +196,8 @@ func TestMaintenanceManager(t *testing.T) {
 			Spec: volsyncv1alpha1.ReplicationSourceSpec{
 				SourcePVC: "test-pvc",
 				Kopia: &volsyncv1alpha1.ReplicationSourceKopiaSpec{
-					Repository:              "test-repo-secret",
-					MaintenanceIntervalDays: &maintenanceInterval,
+					Repository: "test-repo-secret",
+					// MaintenanceIntervalDays removed - use KopiaMaintenance CRD
 				},
 			},
 		}

@@ -929,58 +929,14 @@ func (m *MaintenanceManager) isMaintenanceEnabled(source *volsyncv1alpha1.Replic
 		return false
 	}
 
-	// If MaintenanceCronJob is specified, use its enabled setting
-	if source.Spec.Kopia.MaintenanceCronJob != nil {
-		if source.Spec.Kopia.MaintenanceCronJob.Enabled != nil {
-			return *source.Spec.Kopia.MaintenanceCronJob.Enabled
-		}
-		// Default to enabled if MaintenanceCronJob is specified but Enabled is not set
-		return true
-	}
-
-	// Fall back to maintenanceIntervalDays for backward compatibility
-	// A value of 0 disables maintenance
-	if source.Spec.Kopia.MaintenanceIntervalDays != nil &&
-		*source.Spec.Kopia.MaintenanceIntervalDays == 0 {
-		return false
-	}
-
-	// Default to enabled
-	return true
+	// Deprecated fields removed - maintenance is now managed by KopiaMaintenance CRD
+	// Default to disabled since maintenance should be managed by KopiaMaintenance
+	return false
 }
 
 // getMaintenanceSchedule determines the maintenance schedule for a source
 func (m *MaintenanceManager) getMaintenanceSchedule(source *volsyncv1alpha1.ReplicationSource) string {
-	// Use schedule from MaintenanceCronJob if specified
-	if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceCronJob != nil {
-		if source.Spec.Kopia.MaintenanceCronJob.Schedule != "" {
-			return source.Spec.Kopia.MaintenanceCronJob.Schedule
-		}
-	}
-
-	// Fall back to converting maintenanceIntervalDays to a schedule if specified
-	if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceIntervalDays != nil {
-		days := *source.Spec.Kopia.MaintenanceIntervalDays
-		if days <= 0 {
-			return defaultMaintenanceSchedule
-		}
-
-		// Convert days to cron schedule
-		switch days {
-		case 1:
-			return "0 2 * * *" // Daily at 2 AM
-		case 7:
-			return "0 2 * * 0" // Weekly on Sunday at 2 AM
-		case 30, 31:
-			return "0 2 1 * *" // Monthly on the 1st at 2 AM
-		default:
-			// For other values, use daily schedule
-			// The actual interval check will be handled by the maintenance job
-			return "0 2 * * *"
-		}
-	}
-
-	// Default schedule
+	// Deprecated fields removed - maintenance is now managed by KopiaMaintenance CRD
 	return defaultMaintenanceSchedule
 }
 
@@ -1048,53 +1004,32 @@ func (m *MaintenanceManager) getServiceAccountName(owner client.Object) string {
 
 // getSuccessfulJobsHistoryLimit gets the successful jobs history limit from MaintenanceCronJobSpec
 func (m *MaintenanceManager) getSuccessfulJobsHistoryLimit(owner client.Object) *int32 {
-	if source, ok := owner.(*volsyncv1alpha1.ReplicationSource); ok {
-		if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceCronJob != nil {
-			if source.Spec.Kopia.MaintenanceCronJob.SuccessfulJobsHistoryLimit != nil {
-				return source.Spec.Kopia.MaintenanceCronJob.SuccessfulJobsHistoryLimit
-			}
-		}
-	}
+	// Deprecated fields removed - maintenance config now managed by KopiaMaintenance CRD
+	_ = owner // Keep parameter for interface compatibility
 	// Default value
 	return ptr.To(int32(3))
 }
 
 // getFailedJobsHistoryLimit gets the failed jobs history limit from MaintenanceCronJobSpec
 func (m *MaintenanceManager) getFailedJobsHistoryLimit(owner client.Object) *int32 {
-	if source, ok := owner.(*volsyncv1alpha1.ReplicationSource); ok {
-		if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceCronJob != nil {
-			if source.Spec.Kopia.MaintenanceCronJob.FailedJobsHistoryLimit != nil {
-				return source.Spec.Kopia.MaintenanceCronJob.FailedJobsHistoryLimit
-			}
-		}
-	}
+	// Deprecated fields removed - maintenance config now managed by KopiaMaintenance CRD
+	_ = owner // Keep parameter for interface compatibility
 	// Default value
 	return ptr.To(int32(1))
 }
 
 // isSuspended checks if maintenance is suspended from MaintenanceCronJobSpec
 func (m *MaintenanceManager) isSuspended(owner client.Object) *bool {
-	if source, ok := owner.(*volsyncv1alpha1.ReplicationSource); ok {
-		if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceCronJob != nil {
-			if source.Spec.Kopia.MaintenanceCronJob.Suspend != nil {
-				return source.Spec.Kopia.MaintenanceCronJob.Suspend
-			}
-		}
-	}
+	// Deprecated fields removed - maintenance config now managed by KopiaMaintenance CRD
+	_ = owner // Keep parameter for interface compatibility
 	// Default to not suspended
 	return ptr.To(false)
 }
 
 // getMaintenanceResources returns the resource requirements for maintenance containers
 func (m *MaintenanceManager) getMaintenanceResources(owner client.Object) corev1.ResourceRequirements {
-	// Check if custom resources are configured
-	if source, ok := owner.(*volsyncv1alpha1.ReplicationSource); ok {
-		if source.Spec.Kopia != nil && source.Spec.Kopia.MaintenanceCronJob != nil {
-			if source.Spec.Kopia.MaintenanceCronJob.Resources != nil {
-				return *source.Spec.Kopia.MaintenanceCronJob.Resources
-			}
-		}
-	}
+	// Deprecated fields removed - maintenance resources now managed by KopiaMaintenance CRD
+	_ = owner // Keep parameter for interface compatibility
 
 	// Return default resources if not configured
 	return corev1.ResourceRequirements{

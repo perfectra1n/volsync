@@ -236,7 +236,7 @@ func main() {
 		os.Exit(1)
 	}
 	// Register the Kopia Maintenance Controller for proactive maintenance management
-	if err = (&controller.KopiaMaintenanceController{
+	if err = (&controller.KopiaMaintenanceReconciler{
 		Client:        mgr.GetClient(),
 		Log:           ctrl.Log.WithName("controller").WithName("KopiaMaintenance"),
 		Scheme:        mgr.GetScheme(),

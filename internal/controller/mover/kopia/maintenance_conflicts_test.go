@@ -1,4 +1,8 @@
-//go:build !disable_kopia
+//go:build disabled_test && !disable_kopia
+// +build disabled_test,!disable_kopia
+
+// This test file is disabled because it tests deprecated MaintenanceCronJob fields
+// that have been removed in favor of the KopiaMaintenance CRD
 
 /*
 Copyright 2025 The VolSync authors.

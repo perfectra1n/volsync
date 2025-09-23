@@ -44,6 +44,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// KopiaMaintenanceTriggerSpec defines when maintenance will be performed.
+type KopiaMaintenanceTriggerSpec struct {
+	// schedule is a cronspec (https://en.wikipedia.org/wiki/Cron#Overview) that
+	// can be used to schedule maintenance to occur at regular, time-based
+	// intervals.
+	// nolint:lll
+	//+kubebuilder:validation:Pattern=`^(@(annually|yearly|monthly|weekly|daily|hourly))|((((\d+,)*\d+|(\d+(\/|-)\d+)|\*(\/\d+)?)\s?){5})$`
+	//+optional
+	Schedule *string `json:"schedule,omitempty"`
+	// manual is a string value that schedules a manual trigger.
+	// Once a maintenance completes then status.lastManualSync is set to the same string value.
+	// A consumer of a manual trigger should set spec.trigger.manual to a known value
+	// and then wait for lastManualSync to be updated by the operator to the same value,
+	// which means that the manual trigger will then pause and wait for further
+	// updates to the trigger.
+	//+optional
+	Manual string `json:"manual,omitempty"`
+}
+
 // KopiaMaintenanceSpec defines the desired state of KopiaMaintenance
 type KopiaMaintenanceSpec struct {
 	// Repository defines the repository configuration for maintenance.
@@ -51,11 +70,18 @@ type KopiaMaintenanceSpec struct {
 	// +kubebuilder:validation:Required
 	Repository KopiaRepositorySpec `json:"repository"`
 
+	// Trigger determines when maintenance will be performed.
+	// If not specified, defaults to a schedule of "0 2 * * *" (daily at 2am).
+	//+optional
+	Trigger *KopiaMaintenanceTriggerSpec `json:"trigger,omitempty"`
+
 	// Schedule is a cron schedule for when maintenance should run.
 	// The schedule is interpreted in the controller's timezone.
+	// DEPRECATED: Use Trigger.Schedule instead. This field will be removed in a future version.
 	// +kubebuilder:validation:Pattern=`^(@(annually|yearly|monthly|weekly|daily|hourly))|((((\d+,)*\d+|(\d+(\/|-)\d+)|\*(\/\d+)?)\s?){5})$`
 	// +kubebuilder:default="0 2 * * *"
 	// +optional
+	// +deprecated
 	Schedule string `json:"schedule,omitempty"`
 
 	// Enabled determines if maintenance should be performed.
@@ -164,6 +190,10 @@ type KopiaMaintenanceStatus struct {
 	// +optional
 	MaintenanceFailures int32 `json:"maintenanceFailures,omitempty"`
 
+	// LastManualSync is set to the last spec.trigger.manual when the manual maintenance is done.
+	// +optional
+	LastManualSync string `json:"lastManualSync,omitempty"`
+
 	// Conditions represent the latest available observations of the
 	// maintenance configuration's state.
 	// +optional
@@ -213,10 +243,34 @@ func (km *KopiaMaintenance) GetEnabled() bool {
 
 // GetSchedule returns the maintenance schedule
 func (km *KopiaMaintenance) GetSchedule() string {
-	if km.Spec.Schedule == "" {
-		return "0 2 * * *" // Default schedule
+	// Check new trigger field first
+	if km.Spec.Trigger != nil && km.Spec.Trigger.Schedule != nil {
+		return *km.Spec.Trigger.Schedule
 	}
-	return km.Spec.Schedule
+	// Fall back to deprecated Schedule field
+	if km.Spec.Schedule != "" {
+		return km.Spec.Schedule
+	}
+	return "0 2 * * *" // Default schedule
+}
+
+// GetManualTrigger returns the manual trigger value if set
+func (km *KopiaMaintenance) GetManualTrigger() string {
+	if km.Spec.Trigger != nil {
+		return km.Spec.Trigger.Manual
+	}
+	return ""
+}
+
+// HasScheduleTrigger returns true if this resource uses schedule-based triggering
+func (km *KopiaMaintenance) HasScheduleTrigger() bool {
+	// Has schedule if either new trigger.schedule or deprecated schedule field is set
+	return (km.Spec.Trigger != nil && km.Spec.Trigger.Schedule != nil) || km.Spec.Schedule != ""
+}
+
+// HasManualTrigger returns true if this resource uses manual triggering
+func (km *KopiaMaintenance) HasManualTrigger() bool {
+	return km.Spec.Trigger != nil && km.Spec.Trigger.Manual != ""
 }
 
 // GetRepositorySecret returns the repository secret name
@@ -231,13 +285,35 @@ func (km *KopiaMaintenance) Validate() error {
 		return fmt.Errorf("repository.repository field is required")
 	}
 
-	// Validate cron schedule format
+	// Validate trigger configuration
+	if km.Spec.Trigger != nil {
+		// Can't have both schedule and manual triggers
+		if km.Spec.Trigger.Schedule != nil && km.Spec.Trigger.Manual != "" {
+			return fmt.Errorf("cannot specify both schedule and manual triggers")
+		}
+
+		// Validate schedule format if present
+		if km.Spec.Trigger.Schedule != nil && *km.Spec.Trigger.Schedule != "" {
+			parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+			if _, err := parser.Parse(*km.Spec.Trigger.Schedule); err != nil {
+				return fmt.Errorf("invalid cron schedule format in trigger: %w", err)
+			}
+		}
+	}
+
+	// Validate deprecated cron schedule format
 	if km.Spec.Schedule != "" {
 		// Parse the cron schedule to validate format
 		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 		if _, err := parser.Parse(km.Spec.Schedule); err != nil {
 			return fmt.Errorf("invalid cron schedule format: %w", err)
 		}
+	}
+
+	// Warn if both new and deprecated fields are used
+	if km.Spec.Trigger != nil && km.Spec.Trigger.Schedule != nil && km.Spec.Schedule != "" {
+		// This is not an error, but the new field takes precedence
+		// Controller should log a warning about this
 	}
 
 	// Validate resource requirements if specified

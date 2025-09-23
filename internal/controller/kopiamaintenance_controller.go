@@ -29,17 +29,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
-	"github.com/backube/volsync/internal/controller/mover/kopia"
 	"github.com/backube/volsync/internal/controller/utils"
 )
 
@@ -55,6 +56,14 @@ type KopiaMaintenanceReconciler struct {
 	Log            logr.Logger
 	EventRecorder  record.EventRecorder
 	containerImage string
+}
+
+// getContainerImage returns the container image to use for maintenance jobs
+func (r *KopiaMaintenanceReconciler) getContainerImage() string {
+	if r.containerImage == "" {
+		return utils.GetDefaultKopiaImage()
+	}
+	return r.containerImage
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -148,7 +157,7 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Check if maintenance is enabled
 	if !maintenance.GetEnabled() {
 		logger.V(1).Info("Maintenance is disabled")
-		// Clean up any existing CronJobs
+		// Clean up any existing CronJobs/Jobs
 		if err := r.cleanupCronJob(ctx, maintenance); err != nil {
 			logger.Error(err, "Failed to cleanup CronJob")
 			return ctrl.Result{RequeueAfter: time.Minute}, err
@@ -156,7 +165,32 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, r.updateStatusWithError(ctx, maintenance, "", nil)
 	}
 
-	// Ensure the CronJob exists for the repository
+	// Handle manual trigger
+	if maintenance.HasManualTrigger() {
+		return r.handleManualTrigger(ctx, maintenance, logger)
+	}
+
+	// Handle scheduled trigger
+	if maintenance.HasScheduleTrigger() {
+		// Ensure the CronJob exists for the repository
+		cronJobName, err := r.ensureCronJob(ctx, maintenance)
+		if err != nil {
+			logger.Error(err, "Failed to ensure CronJob")
+			r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "CronJobFailed",
+				fmt.Sprintf("Failed to ensure CronJob: %v", err))
+			// Update status with error
+			if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: time.Minute}, err
+		}
+
+		// Update status
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, r.updateStatusWithError(ctx, maintenance, cronJobName, nil)
+	}
+
+	// No trigger configured, use default schedule
+	logger.V(1).Info("No trigger configured, using default schedule")
 	cronJobName, err := r.ensureCronJob(ctx, maintenance)
 	if err != nil {
 		logger.Error(err, "Failed to ensure CronJob")
@@ -171,6 +205,208 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Update status
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, r.updateStatusWithError(ctx, maintenance, cronJobName, nil)
+}
+
+// handleManualTrigger handles manual trigger for KopiaMaintenance
+func (r *KopiaMaintenanceReconciler) handleManualTrigger(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance, logger logr.Logger) (ctrl.Result, error) {
+	manualTag := maintenance.GetManualTrigger()
+
+	// Check if we need to trigger a maintenance job
+	if maintenance.Status != nil && maintenance.Status.LastManualSync == manualTag {
+		// Already synced with this manual tag
+		logger.V(1).Info("Manual trigger already processed", "tag", manualTag)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	logger.Info("Processing manual trigger", "tag", manualTag)
+
+	// Create a Job for manual maintenance
+	jobName, err := r.ensureMaintenanceJob(ctx, maintenance)
+	if err != nil {
+		logger.Error(err, "Failed to create maintenance job for manual trigger")
+		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "JobCreationFailed",
+			fmt.Sprintf("Failed to create maintenance job: %v", err))
+		if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status")
+		}
+		return ctrl.Result{RequeueAfter: time.Minute}, err
+	}
+
+	// Check job status
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: maintenance.Namespace}, job); err != nil {
+		logger.Error(err, "Failed to get maintenance job")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+
+	// Check if job completed successfully
+	if job.Status.Succeeded > 0 {
+		logger.Info("Manual maintenance job completed successfully", "job", jobName)
+
+		// Update LastManualSync in status
+		if maintenance.Status == nil {
+			maintenance.Status = &volsyncv1alpha1.KopiaMaintenanceStatus{}
+		}
+		maintenance.Status.LastManualSync = manualTag
+		maintenance.Status.LastMaintenanceTime = &metav1.Time{Time: time.Now()}
+		maintenance.Status.MaintenanceFailures = 0
+
+		if err := r.updateStatusWithError(ctx, maintenance, "", nil); err != nil {
+			logger.Error(err, "Failed to update status after successful manual maintenance")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
+
+		r.EventRecorder.Event(maintenance, corev1.EventTypeNormal, "ManualMaintenanceCompleted",
+			fmt.Sprintf("Manual maintenance completed successfully with tag: %s", manualTag))
+
+		// Clean up the job after success
+		if err := r.Delete(ctx, job); err != nil && !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to delete completed job", "job", jobName)
+		}
+
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// Check if job failed
+	if job.Status.Failed > 0 {
+		logger.Error(nil, "Manual maintenance job failed", "job", jobName)
+
+		if maintenance.Status == nil {
+			maintenance.Status = &volsyncv1alpha1.KopiaMaintenanceStatus{}
+		}
+		maintenance.Status.MaintenanceFailures++
+
+		if err := r.updateStatusWithError(ctx, maintenance, "", fmt.Errorf("maintenance job failed")); err != nil {
+			logger.Error(err, "Failed to update status after failed manual maintenance")
+		}
+
+		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "ManualMaintenanceFailed",
+			fmt.Sprintf("Manual maintenance failed with tag: %s", manualTag))
+
+		// Clean up the failed job
+		if err := r.Delete(ctx, job); err != nil && !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to delete failed job", "job", jobName)
+		}
+
+		// Mark manual trigger as processed even on failure to avoid infinite retries
+		maintenance.Status.LastManualSync = manualTag
+		if err := r.updateStatusWithError(ctx, maintenance, "", nil); err != nil {
+			logger.Error(err, "Failed to update LastManualSync after failure")
+		}
+
+		return ctrl.Result{RequeueAfter: time.Minute}, fmt.Errorf("maintenance job failed")
+	}
+
+	// Job is still running
+	logger.V(1).Info("Manual maintenance job still running", "job", jobName)
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// ensureMaintenanceJob creates a Job for manual maintenance
+func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance) (string, error) {
+	// Verify that the repository secret exists
+	repositorySecret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      maintenance.GetRepositorySecret(),
+		Namespace: maintenance.Namespace,
+	}, repositorySecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("repository secret %s not found in namespace %s",
+				maintenance.GetRepositorySecret(), maintenance.Namespace)
+		}
+		return "", fmt.Errorf("failed to get repository secret: %w", err)
+	}
+
+	// Generate a unique name for the job
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%s", maintenance.Namespace, maintenance.Name, maintenance.GetManualTrigger())))
+	jobName := fmt.Sprintf("kopia-maint-manual-%x", hash[:8])
+
+	// Check if job already exists
+	existingJob := &batchv1.Job{}
+	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: maintenance.Namespace}, existingJob)
+	if err == nil {
+		// Job already exists
+		return jobName, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("failed to check for existing job: %w", err)
+	}
+
+	// Create the Job spec similar to what would be in a CronJob
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: maintenance.Namespace,
+			Labels: map[string]string{
+				"volsync.backube/kopia-maintenance": "true",
+				"volsync.backube/maintenance-type":  "manual",
+				"volsync.backube/maintenance-name":  maintenance.Name,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: maintenance.Spec.MoverPodLabels,
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
+						{
+							Name:  "kopia-maintenance",
+							Image: r.getContainerImage(),
+							Command: []string{
+								"/bin/bash",
+								"-c",
+								"kopia maintenance run --full",
+							},
+							Env: []corev1.EnvVar{
+								{
+									Name: "KOPIA_PASSWORD",
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{
+												Name: maintenance.GetRepositorySecret(),
+											},
+											Key: "KOPIA_PASSWORD",
+										},
+									},
+								},
+							},
+							Resources: func() corev1.ResourceRequirements {
+								if maintenance.Spec.Resources != nil {
+									return *maintenance.Spec.Resources
+								}
+								return corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceMemory: resource.MustParse("256Mi"),
+									},
+									Limits: corev1.ResourceList{
+										corev1.ResourceMemory: resource.MustParse("1Gi"),
+									},
+								}
+							}(),
+						},
+					},
+					Affinity: maintenance.Spec.Affinity,
+				},
+			},
+			BackoffLimit: ptr.To(int32(3)),
+			TTLSecondsAfterFinished: ptr.To(int32(3600)), // Clean up after 1 hour
+		},
+	}
+
+	// Set owner reference so the job is cleaned up when KopiaMaintenance is deleted
+	if err := controllerutil.SetControllerReference(maintenance, job, r.Scheme); err != nil {
+		return "", fmt.Errorf("failed to set owner reference: %w", err)
+	}
+
+	// Create the job
+	if err := r.Create(ctx, job); err != nil {
+		return "", fmt.Errorf("failed to create job: %w", err)
+	}
+
+	r.Log.Info("Created manual maintenance job", "job", jobName)
+	return jobName, nil
 }
 
 // ensureCronJob creates or updates a CronJob for the KopiaMaintenance
@@ -188,78 +424,8 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 		return "", fmt.Errorf("failed to get repository secret: %w", err)
 	}
 
-	// Create a synthetic ReplicationSource for the maintenance manager
-	// This allows us to reuse the existing kopia maintenance manager code
-	syntheticSource := &volsyncv1alpha1.ReplicationSource{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("maintenance-%s", maintenance.Name),
-			Namespace: maintenance.Namespace,
-		},
-		Spec: volsyncv1alpha1.ReplicationSourceSpec{
-			Kopia: &volsyncv1alpha1.ReplicationSourceKopiaSpec{
-				Repository: maintenance.GetRepositorySecret(),
-				MaintenanceCronJob: &volsyncv1alpha1.MaintenanceCronJobSpec{
-					Enabled:                    maintenance.Spec.Enabled,
-					Schedule:                   maintenance.GetSchedule(),
-					Suspend:                    maintenance.Spec.Suspend,
-					SuccessfulJobsHistoryLimit: maintenance.Spec.SuccessfulJobsHistoryLimit,
-					FailedJobsHistoryLimit:     maintenance.Spec.FailedJobsHistoryLimit,
-					Resources:                  maintenance.Spec.Resources,
-				},
-			},
-		},
-	}
-
-	// Set CustomCA if specified
-	if maintenance.Spec.Repository.CustomCA != nil {
-		syntheticSource.Spec.Kopia.CustomCA = *maintenance.Spec.Repository.CustomCA
-	}
-
-	// Apply pod configuration if specified
-	if maintenance.Spec.ServiceAccountName != nil {
-		syntheticSource.Spec.Kopia.MoverServiceAccount = maintenance.Spec.ServiceAccountName
-	}
-	if len(maintenance.Spec.MoverPodLabels) > 0 {
-		syntheticSource.Spec.Kopia.MoverPodLabels = maintenance.Spec.MoverPodLabels
-	}
-	if maintenance.Spec.Affinity != nil {
-		syntheticSource.Spec.Kopia.MoverAffinity = maintenance.Spec.Affinity
-	}
-
-	// Handle NodeSelector and Tolerations through pod spec override if they are specified
-	// Note: These fields require future implementation in the Kopia mover to be fully supported
-	// For now, they are preserved in the spec but not actively used
-	if len(maintenance.Spec.NodeSelector) > 0 || len(maintenance.Spec.Tolerations) > 0 {
-		r.Log.V(1).Info("NodeSelector and Tolerations are not yet implemented in Kopia mover",
-			"namespace", maintenance.Namespace, "name", maintenance.Name)
-	}
-
-	// Create maintenance manager
-	mgr := kopia.NewMaintenanceManager(r.Client, r.Log, r.containerImage)
-
-	// Set the owner reference so the CronJob is owned by the KopiaMaintenance
-	syntheticSource.OwnerReferences = []metav1.OwnerReference{
-		{
-			APIVersion: maintenance.APIVersion,
-			Kind:       maintenance.Kind,
-			Name:       maintenance.Name,
-			UID:        maintenance.UID,
-			Controller: &[]bool{true}[0],
-		},
-	}
-
-	// Ensure the CronJob exists
-	if err := mgr.EnsureMaintenanceCronJob(ctx, syntheticSource); err != nil {
-		return "", fmt.Errorf("failed to ensure maintenance CronJob: %w", err)
-	}
-
-	// Generate the CronJob name with a hash to avoid conflicts
-	// Include namespace to ensure uniqueness across namespaces
+	// Generate a unique name for the CronJob
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s", maintenance.Namespace, maintenance.Name)))
-
-	// Kubernetes names have a 63 character limit
-	// "kopia-maint-" is 12 chars, hash suffix is 16 chars (8 bytes in hex), plus 1 for hyphen = 29 chars overhead
-	// This leaves 34 chars for the maintenance name
 	maxNameLength := 34
 	truncatedName := maintenance.Name
 	if len(truncatedName) > maxNameLength {
@@ -267,7 +433,310 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 	}
 	cronJobName := fmt.Sprintf("kopia-maint-%s-%x", truncatedName, hash[:8])
 
+	// Check if CronJob already exists
+	existingCronJob := &batchv1.CronJob{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      cronJobName,
+		Namespace: maintenance.Namespace,
+	}, existingCronJob)
+
+	if err == nil {
+		// CronJob exists, update it if needed
+		updateNeeded := false
+
+		// Check if schedule needs updating
+		if existingCronJob.Spec.Schedule != maintenance.GetSchedule() {
+			existingCronJob.Spec.Schedule = maintenance.GetSchedule()
+			updateNeeded = true
+		}
+
+		// Check if suspend state needs updating
+		suspend := maintenance.Spec.Suspend != nil && *maintenance.Spec.Suspend
+		if existingCronJob.Spec.Suspend != nil && *existingCronJob.Spec.Suspend != suspend {
+			existingCronJob.Spec.Suspend = &suspend
+			updateNeeded = true
+		} else if existingCronJob.Spec.Suspend == nil && suspend {
+			existingCronJob.Spec.Suspend = &suspend
+			updateNeeded = true
+		}
+
+		// Update history limits if changed
+		if maintenance.Spec.SuccessfulJobsHistoryLimit != nil &&
+			(existingCronJob.Spec.SuccessfulJobsHistoryLimit == nil ||
+				*existingCronJob.Spec.SuccessfulJobsHistoryLimit != *maintenance.Spec.SuccessfulJobsHistoryLimit) {
+			existingCronJob.Spec.SuccessfulJobsHistoryLimit = maintenance.Spec.SuccessfulJobsHistoryLimit
+			updateNeeded = true
+		}
+
+		if maintenance.Spec.FailedJobsHistoryLimit != nil &&
+			(existingCronJob.Spec.FailedJobsHistoryLimit == nil ||
+				*existingCronJob.Spec.FailedJobsHistoryLimit != *maintenance.Spec.FailedJobsHistoryLimit) {
+			existingCronJob.Spec.FailedJobsHistoryLimit = maintenance.Spec.FailedJobsHistoryLimit
+			updateNeeded = true
+		}
+
+		if updateNeeded {
+			if err := r.Update(ctx, existingCronJob); err != nil {
+				return "", fmt.Errorf("failed to update CronJob: %w", err)
+			}
+			r.Log.Info("Updated maintenance CronJob", "name", cronJobName)
+		}
+
+		return cronJobName, nil
+	}
+
+	if !apierrors.IsNotFound(err) {
+		return "", fmt.Errorf("failed to get CronJob: %w", err)
+	}
+
+	// Create new CronJob
+	cronJob := r.buildMaintenanceCronJob(maintenance, cronJobName)
+
+	// Set owner reference so the CronJob is cleaned up when KopiaMaintenance is deleted
+	if err := controllerutil.SetControllerReference(maintenance, cronJob, r.Scheme); err != nil {
+		return "", fmt.Errorf("failed to set owner reference: %w", err)
+	}
+
+	if err := r.Create(ctx, cronJob); err != nil {
+		return "", fmt.Errorf("failed to create CronJob: %w", err)
+	}
+
+	r.Log.Info("Created maintenance CronJob", "name", cronJobName, "schedule", maintenance.GetSchedule())
+	r.EventRecorder.Event(maintenance, corev1.EventTypeNormal, "CronJobCreated",
+		fmt.Sprintf("Created maintenance CronJob %s", cronJobName))
+
 	return cronJobName, nil
+}
+
+// buildMaintenanceCronJob creates a CronJob spec for Kopia maintenance
+func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(maintenance *volsyncv1alpha1.KopiaMaintenance, cronJobName string) *batchv1.CronJob {
+	// Determine resources
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+	}
+	if maintenance.Spec.Resources != nil {
+		resources = *maintenance.Spec.Resources
+	}
+
+	// Build environment variables
+	envVars := []corev1.EnvVar{
+		{
+			Name:  "KOPIA_CONFIG_PATH",
+			Value: "/tmp/kopia-config",
+		},
+		{
+			Name:  "KOPIA_CACHE_DIRECTORY",
+			Value: "/tmp/kopia-cache",
+		},
+		{
+			Name:  "KOPIA_LOG_LEVEL",
+			Value: "info",
+		},
+		{
+			Name:  "KOPIA_LOG_DIR",
+			Value: "/tmp/kopia-logs",
+		},
+		{
+			Name:  "KOPIA_PERSIST_CREDENTIALS_ON_CONNECT",
+			Value: "false",
+		},
+		// Set maintenance mode
+		{
+			Name:  "VOLSYNC_KOPIA_MODE",
+			Value: "maintenance",
+		},
+		// Use maintenance username
+		{
+			Name:  "KOPIA_USERNAME",
+			Value: "maintenance@volsync",
+		},
+		{
+			Name:  "KOPIA_HOSTNAME",
+			Value: "maintenance",
+		},
+	}
+
+	// Build volumes and volume mounts
+	volumes := []corev1.Volume{
+		{
+			Name: "tmp",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	}
+
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "tmp",
+			MountPath: "/tmp",
+		},
+	}
+
+	// Add CustomCA volumes if specified
+	if maintenance.Spec.Repository.CustomCA != nil {
+		if maintenance.Spec.Repository.CustomCA.ConfigMapName != "" {
+			volumes = append(volumes, corev1.Volume{
+				Name: "custom-ca-configmap",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: maintenance.Spec.Repository.CustomCA.ConfigMapName,
+						},
+						Items: []corev1.KeyToPath{
+							{
+								Key:  maintenance.Spec.Repository.CustomCA.Key,
+								Path: "ca-bundle.crt",
+							},
+						},
+					},
+				},
+			})
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      "custom-ca-configmap",
+				MountPath: "/etc/ssl/custom-ca-from-configmap",
+				ReadOnly:  true,
+			})
+			envVars = append(envVars, corev1.EnvVar{
+				Name:  "KOPIA_CUSTOM_CA",
+				Value: "/etc/ssl/custom-ca-from-configmap/ca-bundle.crt",
+			})
+		}
+
+		if maintenance.Spec.Repository.CustomCA.SecretName != "" {
+			volumes = append(volumes, corev1.Volume{
+				Name: "custom-ca-secret",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: maintenance.Spec.Repository.CustomCA.SecretName,
+						Items: []corev1.KeyToPath{
+							{
+								Key:  maintenance.Spec.Repository.CustomCA.Key,
+								Path: "ca-bundle.crt",
+							},
+						},
+					},
+				},
+			})
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      "custom-ca-secret",
+				MountPath: "/etc/ssl/custom-ca-from-secret",
+				ReadOnly:  true,
+			})
+			envVars = append(envVars, corev1.EnvVar{
+				Name:  "KOPIA_CUSTOM_CA",
+				Value: "/etc/ssl/custom-ca-from-secret/ca-bundle.crt",
+			})
+		}
+	}
+
+	// Determine suspend state
+	suspend := maintenance.Spec.Suspend != nil && *maintenance.Spec.Suspend
+
+	// Build the CronJob
+	cronJob := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cronJobName,
+			Namespace: maintenance.Namespace,
+			Labels: map[string]string{
+				"volsync.backube/kopia-maintenance": "true",
+				"volsync.backube/maintenance-name":  maintenance.Name,
+				"app.kubernetes.io/name":            "volsync",
+				"app.kubernetes.io/component":       "kopia-maintenance",
+				"app.kubernetes.io/managed-by":      "volsync",
+			},
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule:                   maintenance.GetSchedule(),
+			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
+			Suspend:                    &suspend,
+			SuccessfulJobsHistoryLimit: ptr.To(int32(3)),
+			FailedJobsHistoryLimit:     ptr.To(int32(1)),
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					BackoffLimit: ptr.To(int32(3)),
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: func() map[string]string {
+								labels := map[string]string{
+									"volsync.backube/kopia-maintenance": "true",
+									"volsync.backube/maintenance-name":  maintenance.Name,
+								}
+								// Add user-specified labels
+								for k, v := range maintenance.Spec.MoverPodLabels {
+									labels[k] = v
+								}
+								return labels
+							}(),
+						},
+						Spec: corev1.PodSpec{
+							ServiceAccountName: func() string {
+								if maintenance.Spec.ServiceAccountName != nil {
+									return *maintenance.Spec.ServiceAccountName
+								}
+								return "default"
+							}(),
+							RestartPolicy: corev1.RestartPolicyOnFailure,
+							SecurityContext: &corev1.PodSecurityContext{
+								RunAsNonRoot: ptr.To(true),
+								FSGroup:      ptr.To(int64(1000)),
+								RunAsUser:    ptr.To(int64(1000)),
+							},
+							Containers: []corev1.Container{
+								{
+									Name:            "kopia-maintenance",
+									Image:           r.getContainerImage(),
+									ImagePullPolicy: corev1.PullIfNotPresent,
+									Command:         []string{"/bin/bash", "-c"},
+									Args:            []string{"/mover-kopia/entry.sh"},
+									Env:             envVars,
+									EnvFrom: []corev1.EnvFromSource{
+										{
+											SecretRef: &corev1.SecretEnvSource{
+												LocalObjectReference: corev1.LocalObjectReference{
+													Name: maintenance.GetRepositorySecret(),
+												},
+											},
+										},
+									},
+									VolumeMounts: volumeMounts,
+									Resources:    resources,
+									SecurityContext: &corev1.SecurityContext{
+										AllowPrivilegeEscalation: ptr.To(false),
+										Capabilities: &corev1.Capabilities{
+											Drop: []corev1.Capability{"ALL"},
+										},
+										Privileged:             ptr.To(false),
+										ReadOnlyRootFilesystem: ptr.To(true),
+										RunAsNonRoot:           ptr.To(true),
+										RunAsUser:              ptr.To(int64(1000)),
+									},
+								},
+							},
+							Volumes:  volumes,
+							Affinity: maintenance.Spec.Affinity,
+							// Note: NodeSelector and Tolerations are preserved in spec but not yet fully supported
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Apply history limits if specified
+	if maintenance.Spec.SuccessfulJobsHistoryLimit != nil {
+		cronJob.Spec.SuccessfulJobsHistoryLimit = maintenance.Spec.SuccessfulJobsHistoryLimit
+	}
+	if maintenance.Spec.FailedJobsHistoryLimit != nil {
+		cronJob.Spec.FailedJobsHistoryLimit = maintenance.Spec.FailedJobsHistoryLimit
+	}
+
+	return cronJob
 }
 
 // cleanupCronJob removes the CronJob managed by this KopiaMaintenance
