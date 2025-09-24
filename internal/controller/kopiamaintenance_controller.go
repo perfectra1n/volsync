@@ -48,6 +48,16 @@ import (
 const (
 	// kopiaMaintenanceFinalizer is the finalizer added to KopiaMaintenance resources
 	kopiaMaintenanceFinalizer = "volsync.backube/kopiamaintenance-protection"
+
+	// Maintenance job timeout values
+	maintenanceJobTTL           = 3600 // 1 hour
+	maintenanceJobTimeout       = 3600 // 1 hour
+	maintenanceJobBackoffLimit  = 5
+	maintenanceJobCheckInterval = 10 * time.Second
+
+	// Failure thresholds
+	maxConsecutiveFailures = 5
+	maxScheduledFailures   = 10
 )
 
 // min returns the minimum of two integers
@@ -82,11 +92,12 @@ func (r *KopiaMaintenanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.containerImage = utils.GetDefaultKopiaImage()
 	}
 
-	// Watch KopiaMaintenance resources and CronJobs they own
+	// Watch KopiaMaintenance resources, CronJobs and Jobs they own
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("kopiamaintenance"). // Explicit name for the controller
 		For(&volsyncv1alpha1.KopiaMaintenance{}).
 		Owns(&batchv1.CronJob{}).
+		Owns(&batchv1.Job{}). // Also watch owned Jobs for manual maintenance
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 3,
 		}).
@@ -183,7 +194,6 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Handle scheduled trigger
 	if maintenance.HasScheduleTrigger() {
 		// Check for excessive failures in scheduled maintenance
-		const maxScheduledFailures = 10
 		if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxScheduledFailures {
 			logger.Info("Scheduled maintenance has failed too many times",
 				"failures", maintenance.Status.MaintenanceFailures,
@@ -236,14 +246,14 @@ func (r *KopiaMaintenanceReconciler) handleManualTrigger(ctx context.Context, ma
 	if maintenance.Status != nil && maintenance.Status.LastManualSync == manualTag {
 		// Already synced with this manual tag
 		logger.V(1).Info("Manual trigger already processed", "tag", manualTag)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		// Don't requeue - the trigger has been processed. User must change or remove the trigger.
+		return ctrl.Result{}, nil
 	}
 
 	logger.Info("Processing manual trigger", "tag", manualTag)
 
 	// Check if we've had too many recent failures
 	// If we've failed 5 times consecutively, wait for user intervention
-	const maxConsecutiveFailures = 5
 	if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxConsecutiveFailures {
 		logger.Error(nil, "Too many consecutive maintenance failures, requires manual intervention",
 			"failures", maintenance.Status.MaintenanceFailures,
@@ -301,18 +311,17 @@ func (r *KopiaMaintenanceReconciler) handleManualTrigger(ctx context.Context, ma
 
 		if err := r.updateStatusWithError(ctx, maintenance, "", nil); err != nil {
 			logger.Error(err, "Failed to update status after successful manual maintenance")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			return ctrl.Result{RequeueAfter: maintenanceJobCheckInterval}, err
 		}
 
 		r.EventRecorder.Event(maintenance, corev1.EventTypeNormal, "ManualMaintenanceCompleted",
 			fmt.Sprintf("Manual maintenance completed successfully with tag: %s", manualTag))
 
-		// Clean up the job after success
-		if err := r.Delete(ctx, job); err != nil && !apierrors.IsNotFound(err) {
-			logger.Error(err, "Failed to delete completed job", "job", jobName)
-		}
+		// Don't delete the job immediately - let TTL or history limits handle cleanup
+		// This prevents recreating the job if the manual trigger remains in the spec
 
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		// Don't requeue - the manual trigger has been processed
+		return ctrl.Result{}, nil
 	}
 
 	// Check if job failed
@@ -365,8 +374,12 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 		return "", fmt.Errorf("failed to get repository secret: %w", err)
 	}
 
-	// Generate a unique name for the job
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%s", maintenance.Namespace, maintenance.Name, maintenance.GetManualTrigger())))
+	// Generate a unique name for the job including timestamp to allow re-triggering
+	// This ensures that if the same trigger is used again later, a new job will be created
+	timestamp := time.Now().Unix()
+	hashInput := fmt.Sprintf("%s/%s/%s/%d", maintenance.Namespace, maintenance.Name,
+		maintenance.GetManualTrigger(), timestamp)
+	hash := sha256.Sum256([]byte(hashInput))
 	jobName := fmt.Sprintf("kopia-maint-manual-%x", hash[:8])
 
 	// Check if job already exists
