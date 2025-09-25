@@ -132,6 +132,21 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// Fix 5: Allow resetting failures via annotation
+	if maintenance.Annotations != nil && maintenance.Annotations["volsync.backube/reset-failures"] == "true" {
+		if maintenance.Status == nil {
+			maintenance.Status = &volsyncv1alpha1.KopiaMaintenanceStatus{}
+		}
+		maintenance.Status.MaintenanceFailures = 0
+		delete(maintenance.Annotations, "volsync.backube/reset-failures")
+		if err := r.Update(ctx, maintenance); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Reset failure counter via annotation")
+		r.EventRecorder.Event(maintenance, corev1.EventTypeNormal, "FailuresReset",
+			"Maintenance failure counter has been reset")
+	}
+
 	// Validate the KopiaMaintenance configuration
 	if err := maintenance.Validate(); err != nil {
 		logger.Error(err, "Invalid KopiaMaintenance configuration")
@@ -188,11 +203,23 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Handle manual trigger
 	if maintenance.HasManualTrigger() {
+		// Fix 3: Clean up any existing CronJob from scheduled trigger when switching to manual
+		if err := r.cleanupCronJob(ctx, maintenance); err != nil {
+			logger.Error(err, "Failed to cleanup CronJob when switching to manual trigger")
+		}
+		// Clean up old manual jobs from previous triggers
+		if err := r.cleanupOldManualJobs(ctx, maintenance); err != nil {
+			logger.Error(err, "Failed to cleanup old manual jobs")
+		}
 		return r.handleManualTrigger(ctx, maintenance, logger)
 	}
 
 	// Handle scheduled trigger
 	if maintenance.HasScheduleTrigger() {
+		// Clean up any old manual jobs when switching to scheduled
+		if err := r.cleanupOldManualJobs(ctx, maintenance); err != nil {
+			logger.Error(err, "Failed to cleanup old manual jobs when switching to scheduled trigger")
+		}
 		// Check for excessive failures in scheduled maintenance
 		if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxScheduledFailures {
 			logger.Info("Scheduled maintenance has failed too many times",
@@ -252,49 +279,66 @@ func (r *KopiaMaintenanceReconciler) handleManualTrigger(ctx context.Context, ma
 
 	logger.Info("Processing manual trigger", "tag", manualTag)
 
-	// Check if we've had too many recent failures
-	// If we've failed 5 times consecutively, wait for user intervention
+	// Fix 2: Check if job already exists for this trigger before creating a new one
+	hashInput := fmt.Sprintf("%s/%s/%s", maintenance.Namespace, maintenance.Name, manualTag)
+	hash := sha256.Sum256([]byte(hashInput))
+	expectedJobName := fmt.Sprintf("kopia-maint-manual-%x", hash[:8])
+
+	existingJob := &batchv1.Job{}
+	jobExists := false
+	if err := r.Get(ctx, types.NamespacedName{Name: expectedJobName, Namespace: maintenance.Namespace}, existingJob); err == nil {
+		jobExists = true
+		logger.V(1).Info("Job already exists for this manual trigger", "job", expectedJobName)
+	}
+
+	// Fix 4: Actually stop after 5 failures (don't create job, just block)
 	if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxConsecutiveFailures {
-		logger.Error(nil, "Too many consecutive maintenance failures, requires manual intervention",
+		logger.Error(nil, "Too many consecutive maintenance failures, blocking job creation",
 			"failures", maintenance.Status.MaintenanceFailures,
 			"maxFailures", maxConsecutiveFailures)
-		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "TooManyFailures",
-			fmt.Sprintf("Maintenance has failed %d times consecutively. Manual intervention required. Reset failures counter or fix underlying issues.",
+
+		// Mark as processed but DON'T create job
+		maintenance.Status.LastManualSync = manualTag
+		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "MaintenanceBlocked",
+			fmt.Sprintf("Blocked due to %d failures. Add annotation 'volsync.backube/reset-failures=true' to reset.",
 				maintenance.Status.MaintenanceFailures))
 
-		// Still mark the manual trigger as processed to avoid infinite retries
-		maintenance.Status.LastManualSync = manualTag
+		// Update status and return WITHOUT creating job
 		if err := r.updateStatusWithError(ctx, maintenance, "",
-			fmt.Errorf("too many consecutive failures (%d)", maintenance.Status.MaintenanceFailures)); err != nil {
+			fmt.Errorf("blocked after %d failures", maintenance.Status.MaintenanceFailures)); err != nil {
 			logger.Error(err, "Failed to update status")
 		}
 
-		// Use exponential backoff for retries: 1min, 2min, 4min, 8min, then cap at 10min
-		backoffMinutes := 1 << min(int(maintenance.Status.MaintenanceFailures-maxConsecutiveFailures), 4)
-		if backoffMinutes > 10 {
-			backoffMinutes = 10
-		}
-		return ctrl.Result{RequeueAfter: time.Duration(backoffMinutes) * time.Minute},
-			fmt.Errorf("too many consecutive maintenance failures")
+		// Don't requeue, don't create job - wait for user to reset failures
+		return ctrl.Result{}, nil
 	}
 
-	// Create a Job for manual maintenance
-	jobName, err := r.ensureMaintenanceJob(ctx, maintenance)
-	if err != nil {
-		logger.Error(err, "Failed to create maintenance job for manual trigger")
-		r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "JobCreationFailed",
-			fmt.Sprintf("Failed to create maintenance job: %v", err))
-		if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
-			logger.Error(statusErr, "Failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: time.Minute}, err
-	}
+	// Create a Job for manual maintenance only if it doesn't exist
+	jobName := expectedJobName
+	var job *batchv1.Job
 
-	// Check job status
-	job := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: maintenance.Namespace}, job); err != nil {
-		logger.Error(err, "Failed to get maintenance job")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	if !jobExists {
+		var err error
+		jobName, err = r.ensureMaintenanceJob(ctx, maintenance)
+		if err != nil {
+			logger.Error(err, "Failed to create maintenance job for manual trigger")
+			r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "JobCreationFailed",
+				fmt.Sprintf("Failed to create maintenance job: %v", err))
+			if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: time.Minute}, err
+		}
+
+		// Get the newly created job
+		job = &batchv1.Job{}
+		if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: maintenance.Namespace}, job); err != nil {
+			logger.Error(err, "Failed to get maintenance job")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
+	} else {
+		// Use the existing job
+		job = existingJob
 	}
 
 	// Check if job completed successfully
@@ -374,11 +418,10 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 		return "", fmt.Errorf("failed to get repository secret: %w", err)
 	}
 
-	// Generate a unique name for the job including timestamp to allow re-triggering
-	// This ensures that if the same trigger is used again later, a new job will be created
-	timestamp := time.Now().Unix()
-	hashInput := fmt.Sprintf("%s/%s/%s/%d", maintenance.Namespace, maintenance.Name,
-		maintenance.GetManualTrigger(), timestamp)
+	// Fix 1: Remove timestamp from job name to prevent infinite loop
+	// Generate a deterministic name based on maintenance name and trigger value
+	hashInput := fmt.Sprintf("%s/%s/%s", maintenance.Namespace, maintenance.Name,
+		maintenance.GetManualTrigger())
 	hash := sha256.Sum256([]byte(hashInput))
 	jobName := fmt.Sprintf("kopia-maint-manual-%x", hash[:8])
 
@@ -545,14 +588,26 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 			updateNeeded = true
 		}
 
-		// Check if suspend state needs updating
-		suspend := maintenance.Spec.Suspend != nil && *maintenance.Spec.Suspend
-		if existingCronJob.Spec.Suspend != nil && *existingCronJob.Spec.Suspend != suspend {
-			existingCronJob.Spec.Suspend = &suspend
-			updateNeeded = true
-		} else if existingCronJob.Spec.Suspend == nil && suspend {
-			existingCronJob.Spec.Suspend = &suspend
-			updateNeeded = true
+		// Fix 6: Suspend CronJob after too many failures
+		if maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxConsecutiveFailures {
+			if existingCronJob.Spec.Suspend == nil || !*existingCronJob.Spec.Suspend {
+				suspend := true
+				existingCronJob.Spec.Suspend = &suspend
+				updateNeeded = true
+				r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "CronJobSuspended",
+					fmt.Sprintf("CronJob suspended due to %d consecutive failures. Add annotation 'volsync.backube/reset-failures=true' to reset.",
+						maintenance.Status.MaintenanceFailures))
+			}
+		} else {
+			// Check if suspend state needs updating based on spec
+			suspend := maintenance.Spec.Suspend != nil && *maintenance.Spec.Suspend
+			if existingCronJob.Spec.Suspend != nil && *existingCronJob.Spec.Suspend != suspend {
+				existingCronJob.Spec.Suspend = &suspend
+				updateNeeded = true
+			} else if existingCronJob.Spec.Suspend == nil && suspend {
+				existingCronJob.Spec.Suspend = &suspend
+				updateNeeded = true
+			}
 		}
 
 		// Update history limits if changed
@@ -711,8 +766,9 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 		}
 	}
 
-	// Determine suspend state
-	suspend := maintenance.Spec.Suspend != nil && *maintenance.Spec.Suspend
+	// Determine suspend state - Fix 6: also suspend on excessive failures
+	suspend := (maintenance.Spec.Suspend != nil && *maintenance.Spec.Suspend) ||
+		(maintenance.Status != nil && maintenance.Status.MaintenanceFailures >= maxConsecutiveFailures)
 
 	// Build the CronJob
 	cronJob := &batchv1.CronJob{
@@ -1126,6 +1182,43 @@ func (r *KopiaMaintenanceReconciler) ensureCache(ctx context.Context, km *volsyn
 	}
 
 	return pvc, nil
+}
+
+// cleanupOldManualJobs removes old manual jobs when trigger changes - Fix 7
+func (r *KopiaMaintenanceReconciler) cleanupOldManualJobs(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance) error {
+	// List all manual jobs for this maintenance
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs,
+		client.InNamespace(maintenance.Namespace),
+		client.MatchingLabels{
+			"volsync.backube/kopia-maintenance": "true",
+			"volsync.backube/maintenance-type": "manual",
+			"volsync.backube/maintenance-name": maintenance.Name,
+		}); err != nil {
+		return err
+	}
+
+	// Delete old jobs except the current one (if it matches the current trigger)
+	currentJobName := ""
+	if maintenance.HasManualTrigger() {
+		// Calculate what the current job name would be
+		hashInput := fmt.Sprintf("%s/%s/%s", maintenance.Namespace, maintenance.Name,
+			maintenance.GetManualTrigger())
+		hash := sha256.Sum256([]byte(hashInput))
+		currentJobName = fmt.Sprintf("kopia-maint-manual-%x", hash[:8])
+	}
+
+	for _, job := range jobs.Items {
+		// Don't delete the current job if it exists
+		if job.Name == currentJobName {
+			continue
+		}
+		// Delete old job
+		if err := r.Delete(ctx, &job); err != nil && !apierrors.IsNotFound(err) {
+			r.Log.V(1).Info("Failed to delete old manual job", "job", job.Name, "error", err)
+		}
+	}
+	return nil
 }
 
 // configureCacheVolume configures the cache volume on the pod spec
