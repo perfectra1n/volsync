@@ -68,6 +68,42 @@ func min(a, b int) int {
 	return b
 }
 
+// resourceRequirementsEqual compares two ResourceRequirements for equality
+// Returns true if both Requests and Limits are equal, false otherwise
+func resourceRequirementsEqual(a, b corev1.ResourceRequirements) bool {
+	// Compare Requests
+	if len(a.Requests) != len(b.Requests) {
+		return false
+	}
+	for resourceName, quantityA := range a.Requests {
+		quantityB, exists := b.Requests[resourceName]
+		if !exists {
+			return false
+		}
+		// Use Cmp for accurate quantity comparison
+		if quantityA.Cmp(quantityB) != 0 {
+			return false
+		}
+	}
+
+	// Compare Limits
+	if len(a.Limits) != len(b.Limits) {
+		return false
+	}
+	for resourceName, quantityA := range a.Limits {
+		quantityB, exists := b.Limits[resourceName]
+		if !exists {
+			return false
+		}
+		// Use Cmp for accurate quantity comparison
+		if quantityA.Cmp(quantityB) != 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
 // KopiaMaintenanceReconciler reconciles a KopiaMaintenance object
 type KopiaMaintenanceReconciler struct {
 	client.Client
@@ -492,14 +528,8 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 								if maintenance.Spec.Resources != nil {
 									return *maintenance.Spec.Resources
 								}
-								return corev1.ResourceRequirements{
-									Requests: corev1.ResourceList{
-										corev1.ResourceMemory: resource.MustParse("256Mi"),
-									},
-									Limits: corev1.ResourceList{
-										corev1.ResourceMemory: resource.MustParse("1Gi"),
-									},
-								}
+								// No default resources - users can set them via spec.resources if needed
+								return corev1.ResourceRequirements{}
 							}(),
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: ptr.To(false),
@@ -521,7 +551,7 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 			BackoffLimit: ptr.To(int32(5)),
 			// Exponential backoff configuration
 			// Starts at 10 seconds and doubles up to 6 times (max ~10 minutes)
-			ActiveDeadlineSeconds: ptr.To(int64(3600)), // Overall timeout of 1 hour
+			ActiveDeadlineSeconds:   ptr.To(int64(3600)), // Overall timeout of 1 hour
 			TTLSecondsAfterFinished: ptr.To(int32(3600)), // Clean up after 1 hour
 		},
 	}
@@ -625,6 +655,25 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 			updateNeeded = true
 		}
 
+		// Check if resources need updating
+		desiredResources := corev1.ResourceRequirements{}
+		if maintenance.Spec.Resources != nil {
+			desiredResources = *maintenance.Spec.Resources
+		}
+
+		// Compare with existing container resources
+		if len(existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+			existingResources := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Resources
+			if !resourceRequirementsEqual(existingResources, desiredResources) {
+				existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Resources = desiredResources
+				updateNeeded = true
+				r.Log.Info("Updating maintenance CronJob resources",
+					"name", cronJobName,
+					"oldResources", existingResources,
+					"newResources", desiredResources)
+			}
+		}
+
 		if updateNeeded {
 			if err := r.Update(ctx, existingCronJob); err != nil {
 				return "", fmt.Errorf("failed to update CronJob: %w", err)
@@ -663,15 +712,8 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 
 // buildMaintenanceCronJob creates a CronJob spec for Kopia maintenance
 func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance, cronJobName string) (*batchv1.CronJob, error) {
-	// Determine resources
-	resources := corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceMemory: resource.MustParse("256Mi"),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceMemory: resource.MustParse("1Gi"),
-		},
-	}
+	// Determine resources - no defaults, users can set via spec.resources if needed
+	resources := corev1.ResourceRequirements{}
 	if maintenance.Spec.Resources != nil {
 		resources = *maintenance.Spec.Resources
 	}
@@ -974,8 +1016,8 @@ func (r *KopiaMaintenanceReconciler) updateStatusWithError(ctx context.Context, 
 						if job.Status.Failed > 0 && job.Status.Conditions != nil {
 							for _, condition := range job.Status.Conditions {
 								if condition.Type == batchv1.JobFailed &&
-								   condition.Status == corev1.ConditionTrue &&
-								   (condition.Reason == "BackoffLimitExceeded" || condition.Reason == "DeadlineExceeded") {
+									condition.Status == corev1.ConditionTrue &&
+									(condition.Reason == "BackoffLimitExceeded" || condition.Reason == "DeadlineExceeded") {
 									recentFailures++
 									break
 								}
@@ -1192,8 +1234,8 @@ func (r *KopiaMaintenanceReconciler) cleanupOldManualJobs(ctx context.Context, m
 		client.InNamespace(maintenance.Namespace),
 		client.MatchingLabels{
 			"volsync.backube/kopia-maintenance": "true",
-			"volsync.backube/maintenance-type": "manual",
-			"volsync.backube/maintenance-name": maintenance.Name,
+			"volsync.backube/maintenance-type":  "manual",
+			"volsync.backube/maintenance-name":  maintenance.Name,
 		}); err != nil {
 		return err
 	}
