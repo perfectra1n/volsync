@@ -270,9 +270,16 @@ function check_var_defined {
 function is_cache_corruption_error {
     local error_output="$1"
 
-    # Check for known cache corruption indicators
-    if echo "${error_output}" | grep -q -E "mmap error|unable to open pack index|error loading indexes|invalid argument"; then
+    # Check for specific cache corruption indicators
+    # Be precise to avoid false positives on network/auth errors
+    if echo "${error_output}" | grep -q -E "mmap.*error|unable to open pack index|error loading indexes|index.*corrupt|cache.*corrupt|bad index blob"; then
         log_info "Detected cache corruption error in output"
+        return 0
+    fi
+
+    # Check for specific mmap errno values (ENOMEM=12, EINVAL=22, ENOSPC=28)
+    if echo "${error_output}" | grep -q -E "errno (12|22|28)"; then
+        log_info "Detected mmap-related errno indicating corruption"
         return 0
     fi
 
@@ -285,12 +292,64 @@ function is_cache_corruption_error {
 function clear_corrupted_cache {
     log_warn "=== Clearing corrupted cache directories ==="
 
+    # SAFETY CHECK 1: Verify own-writes is empty (contains uncommitted backup data)
+    if [[ -d "${KOPIA_CACHE_DIR}/own-writes" ]]; then
+        local own_writes_count=$(find "${KOPIA_CACHE_DIR}/own-writes" -type f 2>/dev/null | wc -l)
+        if [[ ${own_writes_count} -gt 0 ]]; then
+            log_error "ERROR: own-writes directory contains ${own_writes_count} uncommitted files"
+            log_error "This indicates an interrupted backup with pending data."
+            log_error "Clearing cache would risk data loss. Please investigate manually."
+            log_error "Path: ${KOPIA_CACHE_DIR}/own-writes"
+            return 1
+        fi
+    fi
+
+    # SAFETY CHECK 2: Prevent symlink attacks
+    local -a dirs_to_clear=("indexes" "index-blobs" "contents" "blob-list")
+    for dir in "${dirs_to_clear[@]}"; do
+        if [[ -L "${KOPIA_CACHE_DIR}/${dir}" ]]; then
+            log_error "SECURITY: ${dir} is a symlink, refusing to delete"
+            log_error "Path: $(ls -l ${KOPIA_CACHE_DIR}/${dir})"
+            log_error "This may indicate a security issue. Please investigate."
+            return 1
+        fi
+    done
+
+    # SAFETY CHECK 3: Acquire lock to prevent concurrent operations
+    local lockfile="${KOPIA_CACHE_DIR}/.cache-cleanup.lock"
+    if ! mkdir "${lockfile}" 2>/dev/null; then
+        log_warn "Another process is already clearing cache, skipping"
+        return 1
+    fi
+    # Set trap to always remove lock
+    trap "rmdir ${lockfile} 2>/dev/null || true" RETURN
+
+    # SAFETY CHECK 4: Rate limiting - prevent cache-clearing loops
+    local cache_clear_marker="${KOPIA_CACHE_DIR}/.last-cache-clear"
+    if [[ -f "${cache_clear_marker}" ]]; then
+        local last_clear=$(cat "${cache_clear_marker}" 2>/dev/null || echo 0)
+        local now=$(date +%s)
+        local elapsed=$((now - last_clear))
+
+        if [[ ${elapsed} -lt 300 ]]; then  # Less than 5 minutes
+            log_error "ERROR: Cache was cleared ${elapsed} seconds ago (less than 5 minutes)"
+            log_error "Repeated cache corruption may indicate a deeper problem:"
+            log_error "  - Filesystem issues (check dmesg)"
+            log_error "  - Memory pressure (check available RAM)"
+            log_error "  - Disk corruption (run fsck)"
+            log_error "Please investigate the root cause before retrying."
+            return 1
+        fi
+    fi
+
+    log_info "All safety checks passed, proceeding with cache cleanup"
     local cleared_something=false
 
     # Clear index cache (safe to remove, will be rebuilt)
     if [[ -d "${KOPIA_CACHE_DIR}/indexes" ]]; then
         log_info "Removing corrupted index cache at ${KOPIA_CACHE_DIR}/indexes"
-        if rm -rf "${KOPIA_CACHE_DIR}/indexes/"* 2>/dev/null; then
+        # Use find for robust deletion (handles hidden files, empty dirs, etc)
+        if find "${KOPIA_CACHE_DIR}/indexes/" -mindepth 1 -delete 2>/dev/null; then
             log_info "Successfully cleared index cache"
             cleared_something=true
         else
@@ -301,7 +360,7 @@ function clear_corrupted_cache {
     # Clear index-blobs cache (safe to remove, will be rebuilt)
     if [[ -d "${KOPIA_CACHE_DIR}/index-blobs" ]]; then
         log_info "Removing index-blobs cache at ${KOPIA_CACHE_DIR}/index-blobs"
-        if rm -rf "${KOPIA_CACHE_DIR}/index-blobs/"* 2>/dev/null; then
+        if find "${KOPIA_CACHE_DIR}/index-blobs/" -mindepth 1 -delete 2>/dev/null; then
             log_info "Successfully cleared index-blobs cache"
             cleared_something=true
         else
@@ -312,7 +371,7 @@ function clear_corrupted_cache {
     # Clear contents cache (safe to remove, will be rebuilt)
     if [[ -d "${KOPIA_CACHE_DIR}/contents" ]]; then
         log_info "Removing contents cache at ${KOPIA_CACHE_DIR}/contents"
-        if rm -rf "${KOPIA_CACHE_DIR}/contents/"* 2>/dev/null; then
+        if find "${KOPIA_CACHE_DIR}/contents/" -mindepth 1 -delete 2>/dev/null; then
             log_info "Successfully cleared contents cache"
             cleared_something=true
         else
@@ -323,7 +382,7 @@ function clear_corrupted_cache {
     # Clear blob-list cache (safe to remove, will be rebuilt)
     if [[ -d "${KOPIA_CACHE_DIR}/blob-list" ]]; then
         log_info "Removing blob-list cache at ${KOPIA_CACHE_DIR}/blob-list"
-        if rm -rf "${KOPIA_CACHE_DIR}/blob-list/"* 2>/dev/null; then
+        if find "${KOPIA_CACHE_DIR}/blob-list/" -mindepth 1 -delete 2>/dev/null; then
             log_info "Successfully cleared blob-list cache"
             cleared_something=true
         else
@@ -337,9 +396,11 @@ function clear_corrupted_cache {
     # - kopia.blobcfg (blob configuration)
     # - logs/ (diagnostic logs)
     # - metadata/ (important metadata)
-    # - own-writes/ (unfinished writes)
+    # - own-writes/ (uncommitted backup data - CRITICAL!)
 
     if [[ "${cleared_something}" == "true" ]]; then
+        # Record successful cache clear for rate limiting
+        date +%s > "${cache_clear_marker}"
         log_info "Cache clearing completed. Kopia will rebuild these on next connection."
         return 0
     else
