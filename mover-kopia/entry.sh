@@ -30,6 +30,11 @@
 #   Format: duration string like "4h", "24h", "7d"
 #   Short retention to minimize PVC disk usage
 #
+# KOPIA_FORCE_CACHE_REBUILD - Force cache clearing before connection (default: false)
+#   Set to "true" to clear corrupted cache before attempting connection
+#   Useful for recovering from cache corruption errors (mmap errors, pack index errors)
+#   Safe to use - only removes cache data that Kopia can rebuild automatically
+#
 # These Kubernetes-optimized defaults minimize cache PVC disk usage since most
 # users rely on external logging systems (Loki, ElasticSearch, Fluentd, etc.)
 # for log aggregation. The local files are primarily for immediate debugging.
@@ -256,6 +261,90 @@ function error {
 function check_var_defined {
     if [[ -z ${!1} ]]; then
         error 1 "$1 must be defined"
+    fi
+}
+
+# Detect if error output indicates cache corruption
+# is_cache_corruption_error "error_output"
+# Returns: 0 if cache corruption detected, 1 otherwise
+function is_cache_corruption_error {
+    local error_output="$1"
+
+    # Check for known cache corruption indicators
+    if echo "${error_output}" | grep -q -E "mmap error|unable to open pack index|error loading indexes|invalid argument"; then
+        log_info "Detected cache corruption error in output"
+        return 0
+    fi
+
+    return 1
+}
+
+# Safely clear corrupted cache directories
+# clear_corrupted_cache
+# This only removes cache data that Kopia can rebuild, keeping config and logs
+function clear_corrupted_cache {
+    log_warn "=== Clearing corrupted cache directories ==="
+
+    local cleared_something=false
+
+    # Clear index cache (safe to remove, will be rebuilt)
+    if [[ -d "${KOPIA_CACHE_DIR}/indexes" ]]; then
+        log_info "Removing corrupted index cache at ${KOPIA_CACHE_DIR}/indexes"
+        if rm -rf "${KOPIA_CACHE_DIR}/indexes/"* 2>/dev/null; then
+            log_info "Successfully cleared index cache"
+            cleared_something=true
+        else
+            log_warn "Could not fully clear index cache (some files may be read-only)"
+        fi
+    fi
+
+    # Clear index-blobs cache (safe to remove, will be rebuilt)
+    if [[ -d "${KOPIA_CACHE_DIR}/index-blobs" ]]; then
+        log_info "Removing index-blobs cache at ${KOPIA_CACHE_DIR}/index-blobs"
+        if rm -rf "${KOPIA_CACHE_DIR}/index-blobs/"* 2>/dev/null; then
+            log_info "Successfully cleared index-blobs cache"
+            cleared_something=true
+        else
+            log_warn "Could not fully clear index-blobs cache"
+        fi
+    fi
+
+    # Clear contents cache (safe to remove, will be rebuilt)
+    if [[ -d "${KOPIA_CACHE_DIR}/contents" ]]; then
+        log_info "Removing contents cache at ${KOPIA_CACHE_DIR}/contents"
+        if rm -rf "${KOPIA_CACHE_DIR}/contents/"* 2>/dev/null; then
+            log_info "Successfully cleared contents cache"
+            cleared_something=true
+        else
+            log_warn "Could not fully clear contents cache"
+        fi
+    fi
+
+    # Clear blob-list cache (safe to remove, will be rebuilt)
+    if [[ -d "${KOPIA_CACHE_DIR}/blob-list" ]]; then
+        log_info "Removing blob-list cache at ${KOPIA_CACHE_DIR}/blob-list"
+        if rm -rf "${KOPIA_CACHE_DIR}/blob-list/"* 2>/dev/null; then
+            log_info "Successfully cleared blob-list cache"
+            cleared_something=true
+        else
+            log_warn "Could not fully clear blob-list cache"
+        fi
+    fi
+
+    # Note: We intentionally do NOT remove:
+    # - kopia.config (connection configuration)
+    # - kopia.repository (repository metadata)
+    # - kopia.blobcfg (blob configuration)
+    # - logs/ (diagnostic logs)
+    # - metadata/ (important metadata)
+    # - own-writes/ (unfinished writes)
+
+    if [[ "${cleared_something}" == "true" ]]; then
+        log_info "Cache clearing completed. Kopia will rebuild these on next connection."
+        return 0
+    else
+        log_warn "No cache directories were cleared"
+        return 1
     fi
 }
 
@@ -839,7 +928,14 @@ function ensure_connected {
         log_timing "Repository status check took $((status_check_end - status_check_start)) seconds (not connected)"
         log_info "Repository not connected, attempting to connect or create..."
         echo ""
-        
+
+        # Check if forced cache rebuild is requested
+        if [[ "${KOPIA_FORCE_CACHE_REBUILD}" == "true" ]]; then
+            log_warn "KOPIA_FORCE_CACHE_REBUILD is set, clearing cache before connection..."
+            clear_corrupted_cache
+            echo ""
+        fi
+
         # Disable exit on error for connection attempts
         set +e
         
@@ -889,8 +985,21 @@ function ensure_connected {
                 local direct_result=$?
                 local direct_connect_end=$(date +%s)
                 log_timing "Direct connection attempt took $((direct_connect_end - direct_connect_start)) seconds"
-                
-                if [[ $direct_result -ne 0 ]]; then
+
+                # Handle cache corruption specially
+                if [[ $direct_result -eq 2 ]]; then
+                    log_warn "Cache corruption detected, clearing cache and retrying..."
+                    clear_corrupted_cache
+                    echo ""
+                    log_info "Retrying connection after cache cleanup..."
+                    connect_repository
+                    direct_result=$?
+
+                    if [[ $direct_result -ne 0 ]]; then
+                        set -e
+                        error 1 "Connection failed even after cache cleanup"
+                    fi
+                elif [[ $direct_result -ne 0 ]]; then
                     log_info "Direct connection failed, creating new repository..."
                     echo ""
                     local create_repo_start=$(date +%s)
@@ -909,8 +1018,21 @@ function ensure_connected {
             echo "Attempting to connect to existing repository..."
             connect_repository
             local direct_result=$?
-            
-            if [[ $direct_result -ne 0 ]]; then
+
+            # Handle cache corruption specially
+            if [[ $direct_result -eq 2 ]]; then
+                log_warn "Cache corruption detected, clearing cache and retrying..."
+                clear_corrupted_cache
+                echo ""
+                log_info "Retrying connection after cache cleanup..."
+                connect_repository
+                direct_result=$?
+
+                if [[ $direct_result -ne 0 ]]; then
+                    set -e
+                    error 1 "Connection failed even after cache cleanup"
+                fi
+            elif [[ $direct_result -ne 0 ]]; then
                 echo "Connection failed, creating new repository..."
                 echo ""
                 create_repository
@@ -1095,20 +1217,53 @@ function connect_repository {
         echo "=== End S3 Connection Debug ==="
         echo ""
         echo "Executing connection command..."
-        execute_repository_command "S3_CONNECT_CMD" "connect"
+
+        # Capture both stdout and stderr to detect errors
+        local error_output
+        error_output=$(execute_repository_command "S3_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+
+        # Display output
+        echo "${error_output}"
+
+        # Check for cache corruption errors
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2  # Special return code for cache corruption
+        fi
+
+        return $connect_result
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Connecting to Azure repository"
         AZURE_CONNECT_CMD=("${KOPIA[@]}" repository connect azure \
             --container="${KOPIA_AZURE_CONTAINER}" \
             --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
-        execute_repository_command "AZURE_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "AZURE_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Connecting to GCS repository"
         GCS_CONNECT_CMD=("${KOPIA[@]}" repository connect gcs \
             --bucket="${KOPIA_GCS_BUCKET}" \
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
-        execute_repository_command "GCS_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "GCS_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
         echo "Connecting to filesystem repository"
         # Extract path from filesystem:// URL
@@ -1120,30 +1275,57 @@ function connect_repository {
             echo "ERROR: Invalid filesystem URL format. Expected filesystem:///path"
             return 1
         fi
-        
+
         # Validate path for security (no path traversal)
         if [[ "${FS_PATH}" =~ \.\./ ]] || [[ ! "${FS_PATH}" =~ ^/ ]]; then
             echo "ERROR: Invalid filesystem path. Path must be absolute and cannot contain .."
             return 1
         fi
-        
+
         echo "Using filesystem path: ${FS_PATH}"
         FS_CONNECT_CMD=("${KOPIA[@]}" repository connect filesystem --path="${FS_PATH}")
-        execute_repository_command "FS_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "FS_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Connecting to Backblaze B2 repository"
         B2_CONNECT_CMD=("${KOPIA[@]}" repository connect b2 \
             --bucket="${KOPIA_B2_BUCKET}" \
             --key-id="${B2_ACCOUNT_ID}" \
             --key="${B2_APPLICATION_KEY}")
-        execute_repository_command "B2_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "B2_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Connecting to WebDAV repository"
         WEBDAV_CONNECT_CMD=("${KOPIA[@]}" repository connect webdav \
             --url="${WEBDAV_URL}" \
             --username="${WEBDAV_USERNAME}" \
             --password="${WEBDAV_PASSWORD}")
-        execute_repository_command "WEBDAV_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "WEBDAV_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Connecting to SFTP repository"
         SFTP_CONNECT_CMD=("${KOPIA[@]}" repository connect sftp \
@@ -1165,7 +1347,16 @@ function connect_repository {
         if [[ -n "${SFTP_KNOWN_HOSTS_DATA}" ]]; then
             SFTP_CONNECT_CMD+=(--known-hosts-data="${SFTP_KNOWN_HOSTS_DATA}")
         fi
-        execute_repository_command "SFTP_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "SFTP_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Connecting to Rclone repository"
         RCLONE_CONNECT_CMD=("${KOPIA[@]}" repository connect rclone \
@@ -1176,13 +1367,31 @@ function connect_repository {
         if [[ -n "${RCLONE_CONFIG}" ]]; then
             RCLONE_CONNECT_CMD+=(--rclone-config="${RCLONE_CONFIG}")
         fi
-        execute_repository_command "RCLONE_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "RCLONE_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Connecting to Google Drive repository"
         GDRIVE_CONNECT_CMD=("${KOPIA[@]}" repository connect gdrive \
             --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
-        execute_repository_command "GDRIVE_CONNECT_CMD" "connect"
+
+        local error_output
+        error_output=$(execute_repository_command "GDRIVE_CONNECT_CMD" "connect" 2>&1)
+        local connect_result=$?
+        echo "${error_output}"
+        if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
+            log_warn "Cache corruption detected. Will attempt recovery."
+            return 2
+        fi
+        return $connect_result
     else
         # Check if we have a generic filesystem:// URL that wasn't matched
         if [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
