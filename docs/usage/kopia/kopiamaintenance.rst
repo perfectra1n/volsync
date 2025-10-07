@@ -164,6 +164,11 @@ Optional Fields
    Custom ServiceAccount for maintenance jobs.
    If not specified, uses default maintenance ServiceAccount.
 
+**podSecurityContext** (*PodSecurityContext*, optional)
+   Pod-level security context for maintenance jobs.
+   Allows configuring security settings such as runAsUser, fsGroup, and other standard Kubernetes pod security options.
+   Default: ``runAsUser: 1000, fsGroup: 1000, runAsNonRoot: true``
+
 **moverPodLabels** (*map[string]string*, optional)
    Additional labels for maintenance pods.
    Applied alongside VolSync-managed labels.
@@ -434,6 +439,263 @@ Temporarily Suspended Maintenance
      enabled: true
      suspend: true  # Temporarily suspended
      successfulJobsHistoryLimit: 10  # Keep more history during suspension
+
+Pod Security Configuration
+==========================
+
+Overview
+--------
+
+The ``podSecurityContext`` field allows you to customize pod-level security settings for maintenance jobs. This is particularly useful when repository directories have specific ownership requirements or when you need to comply with security policies.
+
+When to Use Pod Security Context
+---------------------------------
+
+You should configure ``podSecurityContext`` when:
+
+- **Repository ownership differs from defaults**: Your repository directory is owned by a user other than UID 1000
+- **Permission errors occur**: You see "permission denied" errors when accessing repository files
+- **Security compliance**: Your organization requires specific security context settings
+- **Storage system requirements**: Your storage backend requires specific user/group IDs
+
+Common Use Case: Permission Denied Errors
+------------------------------------------
+
+**Problem**: Maintenance jobs fail with permission errors when accessing the repository.
+
+**Error Example**:
+
+.. code-block:: text
+
+   ERROR error connecting to repository: unable to read format blob:
+   error determining sharded path: error getting sharding parameters for storage:
+   unable to complete GetBlobFromPath:/repository/.shards despite 10 retries:
+   open /repository/.shards: permission denied
+
+**Cause**: The repository directory is owned by a user (e.g., UID 2000) that differs from the default maintenance job user (UID 1000).
+
+**Solution**: Configure ``podSecurityContext`` to match the repository ownership:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: my-maintenance
+     namespace: backup-ns
+   spec:
+     repository:
+       repository: my-repo-secret
+     podSecurityContext:
+       runAsUser: 2000      # Match repository directory owner
+       fsGroup: 2000        # Match repository directory group
+       runAsNonRoot: true   # Security best practice
+
+Configuration Examples
+----------------------
+
+Matching Repository File Ownership
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When your repository files are owned by a specific user:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: custom-user-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-secret
+     podSecurityContext:
+       runAsUser: 2000
+       fsGroup: 2000
+       runAsNonRoot: true
+     trigger:
+       schedule: "0 2 * * *"
+
+Additional Security Settings
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For enhanced security compliance:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: secure-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: secure-repo-secret
+     podSecurityContext:
+       runAsUser: 3000
+       runAsGroup: 3000
+       fsGroup: 3000
+       runAsNonRoot: true
+       seccompProfile:
+         type: RuntimeDefault
+       supplementalGroups:
+         - 4000
+     trigger:
+       schedule: "0 3 * * 0"
+
+Default Security Context
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When ``podSecurityContext`` is not specified, the following defaults are used:
+
+.. code-block:: yaml
+
+   podSecurityContext:
+     runAsUser: 1000
+     fsGroup: 1000
+     runAsNonRoot: true
+
+This default configuration works for most scenarios where repository directories are created by VolSync with standard ownership.
+
+Determining Required User/Group IDs
+------------------------------------
+
+To identify the correct user and group IDs for your repository:
+
+**For filesystem-based repositories (repositoryPVC)**:
+
+.. code-block:: bash
+
+   # Create a temporary pod to check ownership
+   kubectl run -it --rm debug --image=busybox --restart=Never \
+     --overrides='
+     {
+       "spec": {
+         "containers": [{
+           "name": "debug",
+           "image": "busybox",
+           "command": ["sh"],
+           "volumeMounts": [{
+             "name": "repo",
+             "mountPath": "/repository"
+           }]
+         }],
+         "volumes": [{
+           "name": "repo",
+           "persistentVolumeClaim": {
+             "claimName": "your-repository-pvc"
+           }
+         }]
+       }
+     }' \
+     -- sh -c "ls -ln /repository"
+
+   # Look for the numeric user and group IDs in the output
+   # Example output: drwxr-xr-x 2 2000 2000 4096 Jan 20 10:00 repository
+
+**For object storage repositories (S3, Azure, GCS)**:
+
+Object storage typically doesn't require specific UIDs, but you may need to match the user that created the repository if filesystem caching is used.
+
+Available Security Context Fields
+----------------------------------
+
+The ``podSecurityContext`` field supports all standard Kubernetes PodSecurityContext options:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Description
+   * - ``runAsUser``
+     - UID to run the pod processes
+   * - ``runAsGroup``
+     - Primary GID for pod processes
+   * - ``fsGroup``
+     - Special supplemental group for volume ownership
+   * - ``runAsNonRoot``
+     - Ensures containers run as non-root (recommended: true)
+   * - ``supplementalGroups``
+     - Additional groups for the first process
+   * - ``fsGroupChangePolicy``
+     - How volume ownership is changed (OnRootMismatch, Always)
+   * - ``seccompProfile``
+     - Seccomp profile (e.g., RuntimeDefault)
+   * - ``seLinuxOptions``
+     - SELinux options for containers
+   * - ``windowsOptions``
+     - Windows-specific security settings
+
+Container-Level Security
+-------------------------
+
+**Important**: While ``podSecurityContext`` configures pod-level security, VolSync sets container-level security context with hardcoded values for security:
+
+.. code-block:: yaml
+
+   # Container security context (hardcoded for security)
+   securityContext:
+     allowPrivilegeEscalation: false
+     capabilities:
+       drop:
+         - ALL
+     readOnlyRootFilesystem: true
+
+These container-level settings cannot be overridden and provide defense-in-depth security by:
+
+- Preventing privilege escalation
+- Dropping all Linux capabilities
+- Making the root filesystem read-only
+
+The combination of configurable pod security context and hardcoded container security context provides flexibility for user/group configuration while maintaining strong security boundaries.
+
+Backward Compatibility
+----------------------
+
+Existing KopiaMaintenance resources continue to work without changes:
+
+- If ``podSecurityContext`` is not specified, the default values are applied
+- No migration is required for existing configurations
+- You can add ``podSecurityContext`` to existing resources at any time
+
+Troubleshooting Pod Security Issues
+------------------------------------
+
+**Maintenance Jobs Fail with Permission Errors**
+
+.. code-block:: bash
+
+   # Check the maintenance job logs
+   kubectl logs -n <namespace> job/<maintenance-job-name>
+
+   # Verify pod security context
+   kubectl get pod <maintenance-pod> -o jsonpath='{.spec.securityContext}'
+
+   # Check repository directory permissions (for filesystem repos)
+   kubectl exec <maintenance-pod> -- ls -ln /repository
+
+**Solution**: Configure ``podSecurityContext`` to match repository ownership.
+
+**Jobs Won't Start Due to Security Policy Violations**
+
+.. code-block:: bash
+
+   # Check pod security admission warnings
+   kubectl describe pod <maintenance-pod>
+
+**Solution**: Adjust ``podSecurityContext`` to comply with cluster security policies (Pod Security Standards, OPA policies, etc.).
+
+**SELinux Context Errors**
+
+.. code-block:: yaml
+
+   podSecurityContext:
+     seLinuxOptions:
+       level: "s0:c123,c456"
+       role: "system_r"
+       type: "container_t"
+       user: "system_u"
 
 Best Practices
 ==============

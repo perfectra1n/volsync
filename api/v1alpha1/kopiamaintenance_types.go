@@ -121,6 +121,12 @@ type KopiaMaintenanceSpec struct {
 	// +optional
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
 
+	// PodSecurityContext defines the security context for maintenance pods.
+	// This allows configuring pod-level security settings such as runAsUser, fsGroup, etc.
+	// If not specified, defaults to runAsUser: 1000, fsGroup: 1000, runAsNonRoot: true.
+	// +optional
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
 	// MoverPodLabels that should be added to maintenance pods.
 	// These will be in addition to any labels that VolSync may add.
 	// +optional

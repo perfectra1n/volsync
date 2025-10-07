@@ -104,6 +104,135 @@ func resourceRequirementsEqual(a, b corev1.ResourceRequirements) bool {
 	return true
 }
 
+// podSecurityContextEqual compares two PodSecurityContext objects for equality
+// Returns true if both contexts are semantically equal, false otherwise
+func podSecurityContextEqual(a, b *corev1.PodSecurityContext) bool {
+	// Handle nil cases
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Compare RunAsUser
+	if (a.RunAsUser == nil) != (b.RunAsUser == nil) {
+		return false
+	}
+	if a.RunAsUser != nil && *a.RunAsUser != *b.RunAsUser {
+		return false
+	}
+
+	// Compare RunAsGroup
+	if (a.RunAsGroup == nil) != (b.RunAsGroup == nil) {
+		return false
+	}
+	if a.RunAsGroup != nil && *a.RunAsGroup != *b.RunAsGroup {
+		return false
+	}
+
+	// Compare FSGroup
+	if (a.FSGroup == nil) != (b.FSGroup == nil) {
+		return false
+	}
+	if a.FSGroup != nil && *a.FSGroup != *b.FSGroup {
+		return false
+	}
+
+	// Compare RunAsNonRoot
+	if (a.RunAsNonRoot == nil) != (b.RunAsNonRoot == nil) {
+		return false
+	}
+	if a.RunAsNonRoot != nil && *a.RunAsNonRoot != *b.RunAsNonRoot {
+		return false
+	}
+
+	// Compare FSGroupChangePolicy
+	if (a.FSGroupChangePolicy == nil) != (b.FSGroupChangePolicy == nil) {
+		return false
+	}
+	if a.FSGroupChangePolicy != nil && *a.FSGroupChangePolicy != *b.FSGroupChangePolicy {
+		return false
+	}
+
+	// Compare SupplementalGroups
+	if len(a.SupplementalGroups) != len(b.SupplementalGroups) {
+		return false
+	}
+	for i := range a.SupplementalGroups {
+		if a.SupplementalGroups[i] != b.SupplementalGroups[i] {
+			return false
+		}
+	}
+
+	// Compare SELinuxOptions
+	if (a.SELinuxOptions == nil) != (b.SELinuxOptions == nil) {
+		return false
+	}
+	if a.SELinuxOptions != nil {
+		if a.SELinuxOptions.User != b.SELinuxOptions.User ||
+			a.SELinuxOptions.Role != b.SELinuxOptions.Role ||
+			a.SELinuxOptions.Type != b.SELinuxOptions.Type ||
+			a.SELinuxOptions.Level != b.SELinuxOptions.Level {
+			return false
+		}
+	}
+
+	// Compare Seccomp
+	if (a.SeccompProfile == nil) != (b.SeccompProfile == nil) {
+		return false
+	}
+	if a.SeccompProfile != nil {
+		if a.SeccompProfile.Type != b.SeccompProfile.Type {
+			return false
+		}
+		if (a.SeccompProfile.LocalhostProfile == nil) != (b.SeccompProfile.LocalhostProfile == nil) {
+			return false
+		}
+		if a.SeccompProfile.LocalhostProfile != nil &&
+			*a.SeccompProfile.LocalhostProfile != *b.SeccompProfile.LocalhostProfile {
+			return false
+		}
+	}
+
+	// Compare WindowsOptions
+	if (a.WindowsOptions == nil) != (b.WindowsOptions == nil) {
+		return false
+	}
+	if a.WindowsOptions != nil {
+		if (a.WindowsOptions.GMSACredentialSpecName == nil) !=
+			(b.WindowsOptions.GMSACredentialSpecName == nil) {
+			return false
+		}
+		if a.WindowsOptions.GMSACredentialSpecName != nil &&
+			*a.WindowsOptions.GMSACredentialSpecName != *b.WindowsOptions.GMSACredentialSpecName {
+			return false
+		}
+		if (a.WindowsOptions.GMSACredentialSpec == nil) !=
+			(b.WindowsOptions.GMSACredentialSpec == nil) {
+			return false
+		}
+		if a.WindowsOptions.GMSACredentialSpec != nil &&
+			*a.WindowsOptions.GMSACredentialSpec != *b.WindowsOptions.GMSACredentialSpec {
+			return false
+		}
+		if (a.WindowsOptions.RunAsUserName == nil) != (b.WindowsOptions.RunAsUserName == nil) {
+			return false
+		}
+		if a.WindowsOptions.RunAsUserName != nil && *a.WindowsOptions.RunAsUserName != *b.WindowsOptions.RunAsUserName {
+			return false
+		}
+		if (a.WindowsOptions.HostProcess == nil) != (b.WindowsOptions.HostProcess == nil) {
+			return false
+		}
+		if a.WindowsOptions.HostProcess != nil && *a.WindowsOptions.HostProcess != *b.WindowsOptions.HostProcess {
+			return false
+		}
+	}
+
+	return true
+}
+
 // KopiaMaintenanceReconciler reconciles a KopiaMaintenance object
 type KopiaMaintenanceReconciler struct {
 	client.Client
@@ -490,11 +619,17 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: ptr.To(true),
-						FSGroup:      ptr.To(int64(1000)),
-						RunAsUser:    ptr.To(int64(1000)),
-					},
+					SecurityContext: func() *corev1.PodSecurityContext {
+						if maintenance.Spec.PodSecurityContext != nil {
+							return maintenance.Spec.PodSecurityContext
+						}
+						// Default security context
+						return &corev1.PodSecurityContext{
+							RunAsNonRoot: ptr.To(true),
+							FSGroup:      ptr.To(int64(1000)),
+							RunAsUser:    ptr.To(int64(1000)),
+						}
+					}(),
 					Containers: []corev1.Container{
 						{
 							Name:            "kopia-maintenance",
@@ -672,6 +807,27 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 					"oldResources", existingResources,
 					"newResources", desiredResources)
 			}
+		}
+
+		// Check if PodSecurityContext needs updating
+		desiredPodSecurityContext := maintenance.Spec.PodSecurityContext
+		if desiredPodSecurityContext == nil {
+			// Default security context
+			desiredPodSecurityContext = &corev1.PodSecurityContext{
+				RunAsNonRoot: ptr.To(true),
+				FSGroup:      ptr.To(int64(1000)),
+				RunAsUser:    ptr.To(int64(1000)),
+			}
+		}
+
+		existingPodSecurityContext := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.SecurityContext
+		if !podSecurityContextEqual(existingPodSecurityContext, desiredPodSecurityContext) {
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.SecurityContext = desiredPodSecurityContext
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob PodSecurityContext",
+				"name", cronJobName,
+				"oldContext", existingPodSecurityContext,
+				"newContext", desiredPodSecurityContext)
 		}
 
 		if updateNeeded {
@@ -860,11 +1016,17 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 								return "default"
 							}(),
 							RestartPolicy: corev1.RestartPolicyOnFailure,
-							SecurityContext: &corev1.PodSecurityContext{
-								RunAsNonRoot: ptr.To(true),
-								FSGroup:      ptr.To(int64(1000)),
-								RunAsUser:    ptr.To(int64(1000)),
-							},
+							SecurityContext: func() *corev1.PodSecurityContext {
+								if maintenance.Spec.PodSecurityContext != nil {
+									return maintenance.Spec.PodSecurityContext
+								}
+								// Default security context
+								return &corev1.PodSecurityContext{
+									RunAsNonRoot: ptr.To(true),
+									FSGroup:      ptr.To(int64(1000)),
+									RunAsUser:    ptr.To(int64(1000)),
+								}
+							}(),
 							Containers: []corev1.Container{
 								{
 									Name:            "kopia-maintenance",

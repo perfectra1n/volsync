@@ -142,6 +142,8 @@ This section provides quick solutions to the most common Kopia issues:
      - Set KOPIA_LOG_LEVEL to desired level (debug, info, warn, error) in repository secret
    * - Cache PVC filling up with logs
      - Configure logging via KOPIA_FILE_LOG_LEVEL, KOPIA_LOG_DIR_MAX_FILES, KOPIA_LOG_DIR_MAX_AGE in repository secret
+   * - KopiaMaintenance permission denied
+     - Set podSecurityContext.runAsUser and fsGroup to match repository directory ownership
 
 Understanding Enhanced Error Reporting
 ======================================
@@ -1525,6 +1527,220 @@ Best Practices for Policy Configuration
 3. **Monitor Results**: Check that retention is working as expected
 4. **Document Changes**: Keep track of policy modifications and reasons
 5. **Regular Audits**: Periodically verify policies are still appropriate
+
+KopiaMaintenance Permission Issues
+===================================
+
+Permission Denied Accessing Repository
+---------------------------------------
+
+**Problem**: KopiaMaintenance jobs fail with permission errors when accessing repository files
+
+**Error Message**:
+
+.. code-block:: text
+
+   ERROR error connecting to repository: unable to read format blob:
+   error determining sharded path: error getting sharding parameters for storage:
+   unable to complete GetBlobFromPath:/repository/.shards despite 10 retries:
+   open /repository/.shards: permission denied
+
+**Cause**: Repository directory ownership doesn't match the user running maintenance jobs. By default, maintenance jobs run as UID 1000, but your repository may be owned by a different user.
+
+**Diagnosis**:
+
+1. **Check maintenance pod user**:
+
+   .. code-block:: bash
+
+      # Find the maintenance job pod
+      kubectl get pods -n <namespace> -l volsync.backube/kopia-maintenance=true
+
+      # Check the security context
+      kubectl get pod <maintenance-pod> -o jsonpath='{.spec.securityContext}'
+
+2. **Check repository ownership** (for filesystem repositories):
+
+   .. code-block:: bash
+
+      # Create debug pod to check repository ownership
+      kubectl run -it --rm debug --image=busybox --restart=Never \
+        --overrides='
+        {
+          "spec": {
+            "containers": [{
+              "name": "debug",
+              "image": "busybox",
+              "command": ["sh"],
+              "volumeMounts": [{
+                "name": "repo",
+                "mountPath": "/repository"
+              }]
+            }],
+            "volumes": [{
+              "name": "repo",
+              "persistentVolumeClaim": {
+                "claimName": "your-repository-pvc"
+              }
+            }]
+          }
+        }' \
+        -- sh -c "ls -ln /repository"
+
+      # Look for numeric UIDs/GIDs in output
+      # Example: drwxr-xr-x 2 2000 2000 4096 Jan 20 10:00 .
+
+**Solution**:
+
+Configure ``podSecurityContext`` in your KopiaMaintenance resource to match the repository ownership:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: my-maintenance
+     namespace: backup-ns
+   spec:
+     repository:
+       repository: my-repo-secret
+     # Configure security context to match repository ownership
+     podSecurityContext:
+       runAsUser: 2000      # Set to repository owner UID
+       fsGroup: 2000        # Set to repository group GID
+       runAsNonRoot: true
+     trigger:
+       schedule: "0 2 * * *"
+
+**Verification**:
+
+.. code-block:: bash
+
+   # Trigger maintenance manually to test
+   kubectl patch kopiamaintenance my-maintenance -n backup-ns \
+     --type merge -p '{"spec":{"trigger":{"manual":"test-permissions"}}}'
+
+   # Watch for job creation and check logs
+   kubectl get jobs -n backup-ns -w
+
+   # Check logs of the new maintenance job
+   kubectl logs -n backup-ns job/<maintenance-job-name>
+
+Security Context for Different Storage Types
+---------------------------------------------
+
+**Filesystem Repositories (repositoryPVC)**:
+
+Must match the PVC ownership:
+
+.. code-block:: yaml
+
+   podSecurityContext:
+     runAsUser: 2000    # Match PVC owner
+     fsGroup: 2000      # Match PVC group
+
+**Object Storage (S3, Azure, GCS)**:
+
+Generally doesn't require specific UIDs, but if cache is persistent:
+
+.. code-block:: yaml
+
+   podSecurityContext:
+     runAsUser: 1000    # Default is usually fine
+     fsGroup: 1000      # For cache PVC access
+     runAsNonRoot: true
+
+**NFS-backed Repositories**:
+
+May require specific UIDs based on NFS export configuration:
+
+.. code-block:: yaml
+
+   podSecurityContext:
+     runAsUser: 65534     # Often "nobody" user
+     fsGroup: 65534
+     runAsNonRoot: true
+     supplementalGroups:
+       - 100              # Additional groups if needed
+
+Common Scenarios
+----------------
+
+**Scenario 1: Repository Created by Different User**
+
+If your repository was initially created by backup jobs running as a different user:
+
+.. code-block:: yaml
+
+   # Maintenance must match the backup job user
+   spec:
+     podSecurityContext:
+       runAsUser: 2000    # Same as backup ReplicationSource
+       fsGroup: 2000
+
+**Scenario 2: Shared Repository Across Namespaces**
+
+For repositories accessed from multiple namespaces with different users:
+
+.. code-block:: yaml
+
+   # All KopiaMaintenance resources must use the same user
+   spec:
+     podSecurityContext:
+       runAsUser: 3000    # Consistent across all namespaces
+       fsGroup: 3000
+       runAsNonRoot: true
+
+**Scenario 3: Strict Security Policies**
+
+When cluster has Pod Security Standards enforcement:
+
+.. code-block:: yaml
+
+   spec:
+     podSecurityContext:
+       runAsUser: 10000     # Non-privileged UID
+       runAsGroup: 10000
+       fsGroup: 10000
+       runAsNonRoot: true
+       seccompProfile:
+         type: RuntimeDefault
+       # SELinux if required
+       seLinuxOptions:
+         level: "s0:c123,c456"
+
+**Scenario 4: Windows Containers**
+
+For Windows-based storage systems:
+
+.. code-block:: yaml
+
+   spec:
+     podSecurityContext:
+       windowsOptions:
+         gmsaCredentialSpecName: "gmsa-spec"
+         runAsUserName: "ContainerUser"
+
+Best Practices for Pod Security Context
+----------------------------------------
+
+1. **Match Repository Ownership**: Always configure ``podSecurityContext`` to match existing repository ownership rather than changing repository permissions
+
+2. **Document Security Settings**: Maintain documentation of the UIDs/GIDs used for each repository
+
+3. **Consistent Configuration**: Use the same ``podSecurityContext`` for backup (ReplicationSource) and maintenance operations
+
+4. **Test After Changes**: Always test maintenance after changing security context:
+
+   .. code-block:: bash
+
+      # Manual trigger for testing
+      kubectl patch kopiamaintenance <name> -n <namespace> \
+        --type merge -p '{"spec":{"trigger":{"manual":"test-'$(date +%s)'"}}}'
+
+5. **Security Compliance**: Set ``runAsNonRoot: true`` for security best practices
+
+6. **Avoid Root**: Never use UID 0 (root) - Kopia doesn't require root privileges
 
 Debugging with KOPIA_MANUAL_CONFIG
 -----------------------------------
