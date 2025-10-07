@@ -282,6 +282,8 @@ Basic Daily Maintenance (Legacy)
        repository: kopia-repository-secret
      schedule: "0 3 * * *"  # 3 AM daily (deprecated field)
      enabled: true
+     successfulJobsHistoryLimit: 3  # Keep last 3 successful jobs
+     failedJobsHistoryLimit: 1       # Keep last failed job
 
 Weekly Maintenance with Resource Limits
 ----------------------------------------
@@ -735,6 +737,78 @@ To use manual triggers:
 3. Monitor ``status.lastManualSync``
 4. When ``lastManualSync`` matches your trigger value, maintenance is complete
 5. Update ``spec.trigger.manual`` to a new value for next trigger
+
+Job History Management
+----------------------
+
+KopiaMaintenance allows you to control how many completed Job records are retained for successful and failed maintenance operations. This helps balance between having debugging history and reducing cluster resource usage.
+
+Configuration Fields
+^^^^^^^^^^^^^^^^^^^^
+
+**successfulJobsHistoryLimit** (*integer*, default: 3)
+   Controls how many successful maintenance Job records to keep. These records are useful for:
+
+   - Tracking maintenance execution patterns
+   - Verifying maintenance is running on schedule
+   - Reviewing historical performance and duration
+   - Troubleshooting intermittent issues
+
+   Set to 0 to delete successful jobs immediately after completion.
+
+**failedJobsHistoryLimit** (*integer*, default: 1)
+   Controls how many failed maintenance Job records to keep. Failed jobs are crucial for:
+
+   - Diagnosing what went wrong during maintenance
+   - Identifying patterns in failures
+   - Providing logs for troubleshooting
+   - Understanding error conditions
+
+   Set to 0 to delete failed jobs immediately (not recommended).
+
+When to Customize
+^^^^^^^^^^^^^^^^^
+
+**Increase history limits when:**
+
+- Debugging maintenance issues and need more historical context
+- Running maintenance infrequently (weekly/monthly) and want long-term history
+- Tracking performance trends over time
+- Working in development/testing environments
+
+**Decrease history limits when:**
+
+- Running maintenance very frequently (hourly) and don't need extensive history
+- Cluster has limited resources and job records consume too much memory
+- Using external monitoring and don't need Kubernetes job history
+- Operating in resource-constrained environments
+
+Example Configurations
+^^^^^^^^^^^^^^^^^^^^^^
+
+Minimal History (Resource Constrained):
+
+.. code-block:: yaml
+
+   spec:
+     successfulJobsHistoryLimit: 1   # Keep only last success
+     failedJobsHistoryLimit: 0       # Delete failures immediately
+
+Extended History (Debugging):
+
+.. code-block:: yaml
+
+   spec:
+     successfulJobsHistoryLimit: 10  # Keep 10 successful runs
+     failedJobsHistoryLimit: 5       # Keep 5 failed runs for analysis
+
+Balanced Default (Recommended):
+
+.. code-block:: yaml
+
+   spec:
+     successfulJobsHistoryLimit: 3   # Default: last 3 successful runs
+     failedJobsHistoryLimit: 1       # Default: last failed run
 
 Cache Configuration
 -------------------
@@ -1338,6 +1412,33 @@ Schedule Not Working
 1. Validate cron expression using online validators or tools
 2. Check controller timezone configuration
 3. Verify ``suspend`` is not set to ``true``
+
+Job History for Debugging
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The job history limits control how much historical data you have available for troubleshooting:
+
+.. code-block:: bash
+
+   # View recent successful maintenance jobs
+   kubectl get jobs -n <namespace> -l volsync.backube/kopia-maintenance=true \
+     --sort-by=.metadata.creationTimestamp
+
+   # Check job history count
+   kubectl get jobs -n <namespace> -l volsync.backube/kopia-maintenance=true \
+     -o custom-columns=NAME:.metadata.name,STATUS:.status.succeeded,FAILED:.status.failed,START:.status.startTime
+
+   # View logs from a specific job
+   kubectl logs -n <namespace> job/<maintenance-job-name>
+
+   # If you need more history, increase the limits:
+   kubectl patch kopiamaintenance <name> -n <namespace> --type merge \
+     -p '{"spec":{"successfulJobsHistoryLimit":10,"failedJobsHistoryLimit":5}}'
+
+.. tip::
+   If you're troubleshooting maintenance issues and the job history has been
+   cleaned up, consider temporarily increasing ``successfulJobsHistoryLimit``
+   and ``failedJobsHistoryLimit`` to capture more execution history.
 
 Debugging Commands
 ------------------
