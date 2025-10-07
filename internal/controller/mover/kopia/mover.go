@@ -127,6 +127,7 @@ type Mover struct {
 	latestMoverStatus     *volsyncv1alpha1.MoverStatus
 	moverConfig           volsyncv1alpha1.MoverConfig
 	metrics               kopiaMetrics
+	builder               *Builder
 	// User identity for multi-tenancy
 	username string
 	hostname string
@@ -1725,7 +1726,7 @@ func (m *Mover) ReconcileMaintenance(ctx context.Context) error {
 	}
 
 	// Create maintenance manager
-	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage)
+	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage, m.builder)
 
 	// Reconcile maintenance CronJob for this source
 	if err := maintenanceManager.ReconcileMaintenanceForSource(ctx, source); err != nil {
@@ -1754,7 +1755,7 @@ func (m *Mover) GetMaintenanceStatus(ctx context.Context) (*volsyncv1alpha1.Repl
 	}
 
 	// Create maintenance manager
-	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage)
+	maintenanceManager := NewMaintenanceManager(m.client, m.logger, m.containerImage, m.builder)
 
 	// Get maintenance CronJobs for this namespace
 	cronJobs, err := maintenanceManager.GetMaintenanceCronJobsForNamespace(ctx, source.Namespace)

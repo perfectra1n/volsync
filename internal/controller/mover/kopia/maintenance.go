@@ -79,15 +79,17 @@ type MaintenanceManager struct {
 	containerImage    string
 	metrics           kopiaMetrics
 	operatorNamespace string // cached operator namespace
+	builder           *Builder
 }
 
 // NewMaintenanceManager creates a new MaintenanceManager
-func NewMaintenanceManager(client client.Client, logger logr.Logger, containerImage string) *MaintenanceManager {
+func NewMaintenanceManager(client client.Client, logger logr.Logger, containerImage string, builder *Builder) *MaintenanceManager {
 	m := &MaintenanceManager{
 		client:         client,
 		logger:         logger.WithName("maintenance"),
 		containerImage: containerImage,
 		metrics:        newKopiaMetrics(),
+		builder:        builder,
 	}
 	// Initialize operator namespace
 	m.operatorNamespace = m.getOperatorNamespace()
@@ -1002,19 +1004,25 @@ func (m *MaintenanceManager) getServiceAccountName(owner client.Object) string {
 	return maintenanceServiceAccountName
 }
 
-// getSuccessfulJobsHistoryLimit gets the successful jobs history limit from MaintenanceCronJobSpec
+// getSuccessfulJobsHistoryLimit gets the successful jobs history limit from the builder configuration
 func (m *MaintenanceManager) getSuccessfulJobsHistoryLimit(owner client.Object) *int32 {
-	// Deprecated fields removed - maintenance config now managed by KopiaMaintenance CRD
 	_ = owner // Keep parameter for interface compatibility
-	// Default value
+	// Get from builder if available, otherwise use default
+	if m.builder != nil {
+		return ptr.To(m.builder.GetSuccessfulJobsHistoryLimit())
+	}
+	// Default value (fallback if builder is not set)
 	return ptr.To(int32(3))
 }
 
-// getFailedJobsHistoryLimit gets the failed jobs history limit from MaintenanceCronJobSpec
+// getFailedJobsHistoryLimit gets the failed jobs history limit from the builder configuration
 func (m *MaintenanceManager) getFailedJobsHistoryLimit(owner client.Object) *int32 {
-	// Deprecated fields removed - maintenance config now managed by KopiaMaintenance CRD
 	_ = owner // Keep parameter for interface compatibility
-	// Default value
+	// Get from builder if available, otherwise use default
+	if m.builder != nil {
+		return ptr.To(m.builder.GetFailedJobsHistoryLimit())
+	}
+	// Default value (fallback if builder is not set)
 	return ptr.To(int32(1))
 }
 

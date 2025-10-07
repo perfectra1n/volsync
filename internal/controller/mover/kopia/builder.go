@@ -45,8 +45,10 @@ const (
 	defaultKopiaContainerImage = "quay.io/backube/volsync:latest"
 	// Command line flag will be checked first
 	// If command line flag not set, the RELATED_IMAGE_ env var will be used
-	kopiaContainerImageFlag   = "kopia-container-image"
-	kopiaContainerImageEnvVar = "RELATED_IMAGE_KOPIA_CONTAINER"
+	kopiaContainerImageFlag               = "kopia-container-image"
+	kopiaContainerImageEnvVar             = "RELATED_IMAGE_KOPIA_CONTAINER"
+	kopiaSuccessfulJobsHistoryLimitFlag   = "kopia-successful-jobs-history-limit"
+	kopiaFailedJobsHistoryLimitFlag       = "kopia-failed-jobs-history-limit"
 	// defaultUsername is the fallback username when sanitization results in empty string
 	defaultUsername = "volsync-default"
 	// maxUsernameLength is the maximum reasonable length for Kopia usernames
@@ -54,8 +56,10 @@ const (
 )
 
 type Builder struct {
-	viper *viper.Viper  // For unit tests to be able to override - global viper will be used by default in Register()
-	flags *flag.FlagSet // For unit tests to be able to override - global flags will be used by default in Register()
+	viper                      *viper.Viper  // For unit tests to be able to override - global viper will be used by default in Register()
+	flags                      *flag.FlagSet // For unit tests to be able to override - global flags will be used by default in Register()
+	successfulJobsHistoryLimit int32
+	failedJobsHistoryLimit     int32
 }
 
 var _ mover.Builder = &Builder{}
@@ -96,6 +100,31 @@ func newBuilder(viperInstance *viper.Viper, flags *flag.FlagSet) (*Builder, erro
 	// Viper will check for command line flag first, then fallback to the env var
 	err := b.viper.BindEnv(kopiaContainerImageFlag, kopiaContainerImageEnvVar)
 
+	// Setup command line flags for maintenance CronJob history limits
+	b.flags.Int(kopiaSuccessfulJobsHistoryLimitFlag, 3,
+		"The successful jobs history limit for kopia maintenance cronjobs")
+	b.flags.Int(kopiaFailedJobsHistoryLimitFlag, 1,
+		"The failed jobs history limit for kopia maintenance cronjobs")
+
+	// Set defaults for viper (used when flags are not set)
+	b.viper.SetDefault(kopiaSuccessfulJobsHistoryLimitFlag, 3)
+	b.viper.SetDefault(kopiaFailedJobsHistoryLimitFlag, 1)
+
+	// Get the flag values if the flags have been parsed
+	// Otherwise, use the defaults from viper
+	if successfulLimitFlag := b.flags.Lookup(kopiaSuccessfulJobsHistoryLimitFlag); successfulLimitFlag != nil && successfulLimitFlag.Value.String() != "" {
+		// Flag was explicitly set or parsed
+		b.viper.Set(kopiaSuccessfulJobsHistoryLimitFlag, successfulLimitFlag.Value.String())
+	}
+	if failedLimitFlag := b.flags.Lookup(kopiaFailedJobsHistoryLimitFlag); failedLimitFlag != nil && failedLimitFlag.Value.String() != "" {
+		// Flag was explicitly set or parsed
+		b.viper.Set(kopiaFailedJobsHistoryLimitFlag, failedLimitFlag.Value.String())
+	}
+
+	// Read values into struct fields
+	b.successfulJobsHistoryLimit = int32(b.viper.GetInt(kopiaSuccessfulJobsHistoryLimitFlag))
+	b.failedJobsHistoryLimit = int32(b.viper.GetInt(kopiaFailedJobsHistoryLimitFlag))
+
 	return b, err
 }
 
@@ -108,6 +137,16 @@ func (kb *Builder) VersionInfo() string {
 // kopiaContainerImage is the container image name of the kopia data mover
 func (kb *Builder) getKopiaContainerImage() string {
 	return kb.viper.GetString(kopiaContainerImageFlag)
+}
+
+// GetSuccessfulJobsHistoryLimit returns the configured successful jobs history limit
+func (kb *Builder) GetSuccessfulJobsHistoryLimit() int32 {
+	return kb.successfulJobsHistoryLimit
+}
+
+// GetFailedJobsHistoryLimit returns the configured failed jobs history limit
+func (kb *Builder) GetFailedJobsHistoryLimit() int32 {
+	return kb.failedJobsHistoryLimit
 }
 
 func (kb *Builder) FromSource(client client.Client, logger logr.Logger,
@@ -215,6 +254,7 @@ func (kb *Builder) createSourceMover(client client.Client, logger logr.Logger,
 		moverConfig:           source.Spec.Kopia.MoverConfig,
 		repositoryPVC:         source.Spec.Kopia.RepositoryPVC,
 		additionalArgs:        source.Spec.Kopia.AdditionalArgs,
+		builder:               kb,
 	}
 }
 
@@ -425,6 +465,7 @@ func (kb *Builder) FromDestination(client client.Client, logger logr.Logger,
 		latestMoverStatus:           destination.Status.LatestMoverStatus,
 		moverConfig:                 destination.Spec.Kopia.MoverConfig,
 		additionalArgs:              destination.Spec.Kopia.AdditionalArgs,
+		builder:                     kb,
 	}, nil
 }
 

@@ -1246,11 +1246,17 @@ function connect_repository {
             S3_PREFIX="${BASH_REMATCH[1]}"
             # Validate S3 prefix for security
             if [[ "${S3_PREFIX}" =~ ^[a-zA-Z0-9._/-]+$ ]] && [[ ! "${S3_PREFIX}" =~ \.\. ]]; then
-                # Remove trailing slash from S3 prefix for consistency
-                # Kopia handles S3 paths correctly without trailing slashes
-                if [[ -n "${S3_PREFIX}" ]] && [[ "${S3_PREFIX}" =~ /$ ]]; then
-                    S3_PREFIX="${S3_PREFIX%/}"
-                    echo "Removed trailing slash from S3 prefix for consistency"
+                # Normalize multiple consecutive slashes to single slash
+                while [[ "${S3_PREFIX}" =~ // ]]; do
+                    S3_PREFIX="${S3_PREFIX//\/\//\/}"
+                done
+
+                # Ensure S3 prefix has a trailing slash for proper directory separation
+                # Per Kopia docs: "Put trailing slash (/) if you want to use prefix as directory"
+                # Without it, Kopia concatenates prefix with filenames (e.g., "myappkopia.repository")
+                if [[ -n "${S3_PREFIX}" ]] && [[ ! "${S3_PREFIX}" =~ /$ ]]; then
+                    S3_PREFIX="${S3_PREFIX}/"
+                    echo "Added trailing slash to S3 prefix for proper directory separation"
                 fi
                 echo "Using S3 prefix: ${S3_PREFIX}"
                 if [[ -n "${S3_PREFIX}" ]]; then
@@ -1552,11 +1558,17 @@ function create_repository {
             S3_PREFIX="${BASH_REMATCH[1]}"
             # Validate S3 prefix for security
             if [[ "${S3_PREFIX}" =~ ^[a-zA-Z0-9._/-]+$ ]] && [[ ! "${S3_PREFIX}" =~ \.\. ]]; then
-                # Remove trailing slash from S3 prefix for consistency
-                # Kopia handles S3 paths correctly without trailing slashes
-                if [[ -n "${S3_PREFIX}" ]] && [[ "${S3_PREFIX}" =~ /$ ]]; then
-                    S3_PREFIX="${S3_PREFIX%/}"
-                    echo "Removed trailing slash from S3 prefix for consistency"
+                # Normalize multiple consecutive slashes to single slash
+                while [[ "${S3_PREFIX}" =~ // ]]; do
+                    S3_PREFIX="${S3_PREFIX//\/\//\/}"
+                done
+
+                # Ensure S3 prefix has a trailing slash for proper directory separation
+                # Per Kopia docs: "Put trailing slash (/) if you want to use prefix as directory"
+                # Without it, Kopia concatenates prefix with filenames (e.g., "myappkopia.repository")
+                if [[ -n "${S3_PREFIX}" ]] && [[ ! "${S3_PREFIX}" =~ /$ ]]; then
+                    S3_PREFIX="${S3_PREFIX}/"
+                    echo "Added trailing slash to S3 prefix for proper directory separation"
                 fi
                 echo "Using S3 prefix: ${S3_PREFIX}"
                 if [[ -n "${S3_PREFIX}" ]]; then

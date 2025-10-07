@@ -38,6 +38,11 @@ kopia:
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
+  # Kopia maintenance CronJob configuration
+  maintenance:
+    # History limits for maintenance CronJobs
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 1
 kube-rbac-proxy:
   repository: quay.io/brancz/kube-rbac-proxy
   tag: "v0.19.0"

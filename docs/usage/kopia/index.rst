@@ -8,6 +8,7 @@ Kopia-based backup
    database_example
    backends
    filesystem-destination
+   repository-organization
    hostname-design
    multi-tenancy
    backup-configuration
@@ -96,6 +97,9 @@ filesystem destinations via PVC, and many others.
    **Best Practice**: Use a single Kopia repository (single S3 bucket without path prefixes)
    for all your PVCs to maximize deduplication benefits. Kopia can achieve 50-80% storage
    reduction when backing up similar workloads to the same repository.
+
+   See :doc:`repository-organization` for comprehensive guidance on deduplication,
+   repository structure decisions, S3 prefix usage, and storage optimization strategies.
 
 See :doc:`backends` for detailed configuration examples for all supported remote storage backends,
 or :doc:`filesystem-destination` for using PVCs as backup destinations.
@@ -291,6 +295,13 @@ The Kopia documentation has been organized into focused sections for easier navi
    Comprehensive guide to using PersistentVolumeClaims as filesystem-based backup
    destinations. Covers configuration, security, migration from remote storage,
    and use cases for local and network-attached storage.
+
+:doc:`repository-organization`
+   Comprehensive guide to Kopia's deduplication and repository organization strategies.
+   Explains how content-addressable deduplication works, benefits of using a single
+   repository (50-80% storage reduction), when to use S3 prefixes, proper prefix
+   configuration with trailing slash handling, trade-offs between approaches, and
+   migration scenarios. Essential reading for optimizing storage costs.
 
 :doc:`hostname-design`
    Detailed explanation of VolSync's intentional hostname design where hostname equals
