@@ -167,7 +167,21 @@ Optional Fields
 **podSecurityContext** (*PodSecurityContext*, optional)
    Pod-level security context for maintenance jobs.
    Allows configuring security settings such as runAsUser, fsGroup, and other standard Kubernetes pod security options.
+   Container automatically inherits these settings.
    Default: ``runAsUser: 1000, fsGroup: 1000, runAsNonRoot: true``
+
+**containerSecurityContext** (*SecurityContext*, optional)
+   Container-level security context for maintenance jobs.
+   For advanced use cases where you need fine-grained control over container security.
+
+   **IMPORTANT:** For setting the user ID, use ``podSecurityContext.runAsUser`` instead.
+   The container automatically inherits runAsUser from the pod-level context.
+
+   Use this field only for advanced security controls like capabilities, privileged mode,
+   seLinux, or seccomp profiles.
+
+   Default: Security hardening settings are applied automatically (readOnlyRootFilesystem,
+   allowPrivilegeEscalation: false, capabilities dropped)
 
 **moverPodLabels** (*map[string]string*, optional)
    Additional labels for maintenance pods.
@@ -632,25 +646,70 @@ The ``podSecurityContext`` field supports all standard Kubernetes PodSecurityCon
 Container-Level Security
 -------------------------
 
-**Important**: While ``podSecurityContext`` configures pod-level security, VolSync sets container-level security context with hardcoded values for security:
+KopiaMaintenance supports both pod-level and container-level security context configuration.
+This provides flexibility for advanced use cases while keeping simple scenarios straightforward.
+
+Security Context Inheritance
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**How it works:**
+
+1. **Pod-level settings** (``podSecurityContext``) apply to all containers and control volume permissions
+2. **Container-level settings** (``containerSecurityContext``) provide fine-grained container controls
+3. **The container inherits ``runAsUser`` from the pod-level context** - no need to set it twice
+
+**Default behavior** (when containerSecurityContext is not specified):
 
 .. code-block:: yaml
 
-   # Container security context (hardcoded for security)
+   # Container security context (applied automatically)
    securityContext:
      allowPrivilegeEscalation: false
      capabilities:
        drop:
          - ALL
+     privileged: false
      readOnlyRootFilesystem: true
+     runAsNonRoot: true
+     # runAsUser: <inherited from pod-level>
 
-These container-level settings cannot be overridden and provide defense-in-depth security by:
+These defaults provide defense-in-depth security by:
 
 - Preventing privilege escalation
 - Dropping all Linux capabilities
 - Making the root filesystem read-only
+- Ensuring non-root execution
 
-The combination of configurable pod security context and hardcoded container security context provides flexibility for user/group configuration while maintaining strong security boundaries.
+**Simple configuration** (recommended for most users):
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   spec:
+     podSecurityContext:
+       runAsUser: 2000      # Container inherits this
+       fsGroup: 2000
+       runAsNonRoot: true
+
+**Advanced configuration** (for custom capabilities, seLinux, etc.):
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   spec:
+     podSecurityContext:
+       runAsUser: 2000      # Still set user here
+       fsGroup: 2000
+     containerSecurityContext:
+       allowPrivilegeEscalation: false
+       capabilities:
+         drop: ["ALL"]
+         add: ["NET_BIND_SERVICE"]  # Advanced: add specific capability
+       readOnlyRootFilesystem: true
+       runAsNonRoot: true
+       # Don't set runAsUser here - it's inherited from pod level
 
 Backward Compatibility
 ----------------------

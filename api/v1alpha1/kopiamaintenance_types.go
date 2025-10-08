@@ -123,9 +123,32 @@ type KopiaMaintenanceSpec struct {
 
 	// PodSecurityContext defines the security context for maintenance pods.
 	// This allows configuring pod-level security settings such as runAsUser, fsGroup, etc.
+	// These settings are inherited by the container automatically.
 	// If not specified, defaults to runAsUser: 1000, fsGroup: 1000, runAsNonRoot: true.
+	//
+	// For most users, setting runAsUser here is sufficient - the container will inherit it.
 	// +optional
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
+	// ContainerSecurityContext defines the security context for the maintenance container.
+	// This is for advanced use cases where you need to override specific container-level
+	// security settings (capabilities, privileged, seLinux, seccomp, etc.).
+	//
+	// IMPORTANT: For setting the user ID, use PodSecurityContext.runAsUser instead.
+	// The container automatically inherits runAsUser from the pod-level context.
+	//
+	// If not specified, defaults to security hardening settings:
+	// - readOnlyRootFilesystem: true
+	// - allowPrivilegeEscalation: false
+	// - capabilities.drop: ["ALL"]
+	// - runAsNonRoot: true
+	//
+	// Example advanced usage (dropping specific capabilities):
+	//   containerSecurityContext:
+	//     capabilities:
+	//       drop: ["NET_RAW", "SYS_CHROOT"]
+	// +optional
+	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
 
 	// MoverPodLabels that should be added to maintenance pods.
 	// These will be in addition to any labels that VolSync may add.

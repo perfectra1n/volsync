@@ -233,6 +233,156 @@ func podSecurityContextEqual(a, b *corev1.PodSecurityContext) bool {
 	return true
 }
 
+// containerSecurityContextEqual compares two SecurityContext objects for equality
+// Returns true if both contexts are semantically equal, false otherwise
+func containerSecurityContextEqual(a, b *corev1.SecurityContext) bool {
+	// Handle nil cases
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Compare RunAsUser
+	if (a.RunAsUser == nil) != (b.RunAsUser == nil) {
+		return false
+	}
+	if a.RunAsUser != nil && *a.RunAsUser != *b.RunAsUser {
+		return false
+	}
+
+	// Compare RunAsGroup
+	if (a.RunAsGroup == nil) != (b.RunAsGroup == nil) {
+		return false
+	}
+	if a.RunAsGroup != nil && *a.RunAsGroup != *b.RunAsGroup {
+		return false
+	}
+
+	// Compare RunAsNonRoot
+	if (a.RunAsNonRoot == nil) != (b.RunAsNonRoot == nil) {
+		return false
+	}
+	if a.RunAsNonRoot != nil && *a.RunAsNonRoot != *b.RunAsNonRoot {
+		return false
+	}
+
+	// Compare ReadOnlyRootFilesystem
+	if (a.ReadOnlyRootFilesystem == nil) != (b.ReadOnlyRootFilesystem == nil) {
+		return false
+	}
+	if a.ReadOnlyRootFilesystem != nil && *a.ReadOnlyRootFilesystem != *b.ReadOnlyRootFilesystem {
+		return false
+	}
+
+	// Compare AllowPrivilegeEscalation
+	if (a.AllowPrivilegeEscalation == nil) != (b.AllowPrivilegeEscalation == nil) {
+		return false
+	}
+	if a.AllowPrivilegeEscalation != nil && *a.AllowPrivilegeEscalation != *b.AllowPrivilegeEscalation {
+		return false
+	}
+
+	// Compare Privileged
+	if (a.Privileged == nil) != (b.Privileged == nil) {
+		return false
+	}
+	if a.Privileged != nil && *a.Privileged != *b.Privileged {
+		return false
+	}
+
+	// Compare Capabilities
+	if (a.Capabilities == nil) != (b.Capabilities == nil) {
+		return false
+	}
+	if a.Capabilities != nil {
+		if len(a.Capabilities.Add) != len(b.Capabilities.Add) {
+			return false
+		}
+		for i := range a.Capabilities.Add {
+			if a.Capabilities.Add[i] != b.Capabilities.Add[i] {
+				return false
+			}
+		}
+		if len(a.Capabilities.Drop) != len(b.Capabilities.Drop) {
+			return false
+		}
+		for i := range a.Capabilities.Drop {
+			if a.Capabilities.Drop[i] != b.Capabilities.Drop[i] {
+				return false
+			}
+		}
+	}
+
+	// Compare SELinuxOptions
+	if (a.SELinuxOptions == nil) != (b.SELinuxOptions == nil) {
+		return false
+	}
+	if a.SELinuxOptions != nil {
+		if a.SELinuxOptions.User != b.SELinuxOptions.User ||
+			a.SELinuxOptions.Role != b.SELinuxOptions.Role ||
+			a.SELinuxOptions.Type != b.SELinuxOptions.Type ||
+			a.SELinuxOptions.Level != b.SELinuxOptions.Level {
+			return false
+		}
+	}
+
+	// Compare Seccomp
+	if (a.SeccompProfile == nil) != (b.SeccompProfile == nil) {
+		return false
+	}
+	if a.SeccompProfile != nil {
+		if a.SeccompProfile.Type != b.SeccompProfile.Type {
+			return false
+		}
+		if (a.SeccompProfile.LocalhostProfile == nil) != (b.SeccompProfile.LocalhostProfile == nil) {
+			return false
+		}
+		if a.SeccompProfile.LocalhostProfile != nil &&
+			*a.SeccompProfile.LocalhostProfile != *b.SeccompProfile.LocalhostProfile {
+			return false
+		}
+	}
+
+	// Compare WindowsOptions
+	if (a.WindowsOptions == nil) != (b.WindowsOptions == nil) {
+		return false
+	}
+	if a.WindowsOptions != nil {
+		if (a.WindowsOptions.GMSACredentialSpecName == nil) !=
+			(b.WindowsOptions.GMSACredentialSpecName == nil) {
+			return false
+		}
+		if a.WindowsOptions.GMSACredentialSpecName != nil &&
+			*a.WindowsOptions.GMSACredentialSpecName != *b.WindowsOptions.GMSACredentialSpecName {
+			return false
+		}
+		if (a.WindowsOptions.GMSACredentialSpec == nil) !=
+			(b.WindowsOptions.GMSACredentialSpec == nil) {
+			return false
+		}
+		if a.WindowsOptions.GMSACredentialSpec != nil &&
+			*a.WindowsOptions.GMSACredentialSpec != *b.WindowsOptions.GMSACredentialSpec {
+			return false
+		}
+		if (a.WindowsOptions.RunAsUserName == nil) != (b.WindowsOptions.RunAsUserName == nil) {
+			return false
+		}
+		if a.WindowsOptions.RunAsUserName != nil && *a.WindowsOptions.RunAsUserName != *b.WindowsOptions.RunAsUserName {
+			return false
+		}
+		if (a.WindowsOptions.HostProcess == nil) != (b.WindowsOptions.HostProcess == nil) {
+			return false
+		}
+		if a.WindowsOptions.HostProcess != nil && *a.WindowsOptions.HostProcess != *b.WindowsOptions.HostProcess {
+			return false
+		}
+	}
+
+	return true
+}
+
 // KopiaMaintenanceReconciler reconciles a KopiaMaintenance object
 type KopiaMaintenanceReconciler struct {
 	client.Client
@@ -830,6 +980,33 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 				"newContext", desiredPodSecurityContext)
 		}
 
+		// Check if ContainerSecurityContext needs updating
+		desiredContainerSecurityContext := maintenance.Spec.ContainerSecurityContext
+		if desiredContainerSecurityContext == nil {
+			// Default security context - runAsUser inherited from pod SecurityContext
+			desiredContainerSecurityContext = &corev1.SecurityContext{
+				AllowPrivilegeEscalation: ptr.To(false),
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"ALL"},
+				},
+				Privileged:             ptr.To(false),
+				ReadOnlyRootFilesystem: ptr.To(true),
+				RunAsNonRoot:           ptr.To(true),
+			}
+		}
+
+		if len(existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+			existingContainerSecurityContext := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].SecurityContext
+			if !containerSecurityContextEqual(existingContainerSecurityContext, desiredContainerSecurityContext) {
+				existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].SecurityContext = desiredContainerSecurityContext
+				updateNeeded = true
+				r.Log.Info("Updating maintenance CronJob ContainerSecurityContext",
+					"name", cronJobName,
+					"oldContext", existingContainerSecurityContext,
+					"newContext", desiredContainerSecurityContext)
+			}
+		}
+
 		if updateNeeded {
 			if err := r.Update(ctx, existingCronJob); err != nil {
 				return "", fmt.Errorf("failed to update CronJob: %w", err)
@@ -1045,16 +1222,21 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 									},
 									VolumeMounts: volumeMounts,
 									Resources:    resources,
-									SecurityContext: &corev1.SecurityContext{
-										AllowPrivilegeEscalation: ptr.To(false),
-										Capabilities: &corev1.Capabilities{
-											Drop: []corev1.Capability{"ALL"},
-										},
-										Privileged:             ptr.To(false),
-										ReadOnlyRootFilesystem: ptr.To(true),
-										RunAsNonRoot:           ptr.To(true),
-										RunAsUser:              ptr.To(int64(1000)),
-									},
+									SecurityContext: func() *corev1.SecurityContext {
+										if maintenance.Spec.ContainerSecurityContext != nil {
+											return maintenance.Spec.ContainerSecurityContext
+										}
+										// Default security context - runAsUser inherited from pod SecurityContext
+										return &corev1.SecurityContext{
+											AllowPrivilegeEscalation: ptr.To(false),
+											Capabilities: &corev1.Capabilities{
+												Drop: []corev1.Capability{"ALL"},
+											},
+											Privileged:             ptr.To(false),
+											ReadOnlyRootFilesystem: ptr.To(true),
+											RunAsNonRoot:           ptr.To(true),
+										}
+									}(),
 								},
 							},
 							Volumes:  volumes,
