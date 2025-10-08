@@ -1,5 +1,6 @@
 # Default values for volsync.
 replicaCount: 1
+revisionHistoryLimit: 3
 
 image:
   repository: quay.io/backube/volsync
