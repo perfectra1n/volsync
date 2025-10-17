@@ -3,39 +3,39 @@ replicaCount: 1
 revisionHistoryLimit: 3
 
 image:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   # Directly specifies the SHA hash of the container image to deploy
   image: ""
 rclone:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
 restic:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
 rsync:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
 rsync-tls:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
 syncthing:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""
 kopia:
-  repository: quay.io/backube/volsync
+  repository: ghcr.io/perfectra1n/volsync
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
   image: ""

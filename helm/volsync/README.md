@@ -91,7 +91,7 @@ on the command line or via a custom `values.yaml` file.
 - `replicaCount`: `1`
   - The number of replicas of the operator to run. Only one is active at a time,
     controlled via leader election.
-- `image.repository`: `quay.io/backube/volsync`
+- `image.repository`: `ghcr.io/perfectra1n/volsync`
   - The container image of the VolSync operator
 - `image.pullPolicy`: `IfNotPresent`
   - The image pull policy to apply to the operator's image
@@ -101,26 +101,26 @@ on the command line or via a custom `values.yaml` file.
 - `image.image`: (empty)
   - Allows overriding the repository & tag as a single field to support
     specifying a specific container version by hash (e.g.,
-    `quay.io/backube/volsync@sha256:XXXXXXX`).
-- `rclone.repository`: `quay.io/backube/volsync-mover-rclone`
+    `ghcr.io/perfectra1n/volsync@sha256:XXXXXXX`).
+- `rclone.repository`: `ghcr.io/perfectra1n/volsync`
   - The container image for VolSync's rclone-based data mover
 - `rclone.tag`: (current appVersion)
   - The tag to use for the rclone-based data mover
 - `rclone.image`: (empty)
   - Allows overriding the repository & tag as a single field.
-- `restic.repository`: `quay.io/backube/volsync-mover-restic`
+- `restic.repository`: `ghcr.io/perfectra1n/volsync`
   - The container image for VolSync's restic-based data mover
 - `restic.tag`: (current appVersion)
   - The tag to use for the restic-based data mover
 - `restic.image`: (empty)
   - Allows overriding the repository & tag as a single field.
-- `rsync.repository`: `quay.io/backube/volsync-mover-rsync`
+- `rsync.repository`: `ghcr.io/perfectra1n/volsync`
   - The container image for VolSync's rsync-based data mover
 - `rsync.tag`: (current appVersion)
   - The tag to use for the rsync-based data mover
 - `rsync.image`: (empty)
   - Allows overriding the repository & tag as a single field.
-- `rsync-tls.repository`: `quay.io/backube/volsync-mover-rsync-tls`
+- `rsync-tls.repository`: `ghcr.io/perfectra1n/volsync`
   - The container image for VolSync's rsync-tls-based data mover
 - `rsync-tls.tag`: (current appVersion)
   - The tag to use for the rsync-based data mover
