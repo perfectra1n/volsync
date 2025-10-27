@@ -64,6 +64,17 @@ spec:
               spec is the desired state of the KopiaMaintenance, including the
               repository matching criteria and maintenance configuration.
             properties:
+              activeDeadlineSeconds:
+                default: 10800
+                description: |-
+                  ActiveDeadlineSeconds specifies the duration in seconds relative to the startTime
+                  that the job may be active before the system tries to terminate it.
+                  If not specified, defaults to 10800 (3 hours).
+                  This prevents maintenance jobs from running indefinitely.
+                  For repositories requiring longer maintenance windows, increase this value.
+                format: int64
+                minimum: 600
+                type: integer
               affinity:
                 description: Affinity for maintenance pods.
                 properties:

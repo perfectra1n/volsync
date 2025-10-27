@@ -104,6 +104,14 @@ KopiaMaintenanceSpec Fields
    Compute resources required by the maintenance container.
    If not specified, defaults to 256Mi memory request and 1Gi memory limit.
 
+**activeDeadlineSeconds** (*int64*, optional, default: 10800)
+   Specifies the duration in seconds relative to the startTime that the job
+   may be active before the system tries to terminate it. If not specified,
+   defaults to 10800 (3 hours). This prevents maintenance jobs from running
+   indefinitely. For repositories requiring longer maintenance windows (e.g.,
+   very large repositories that take 8+ hours), increase this value.
+   Minimum: 600 (10 minutes).
+
 **podSecurityContext** (*PodSecurityContext*, optional)
    Security context for the entire maintenance pod.
 
@@ -609,6 +617,7 @@ Example 3: Direct Repository Configuration
          configMapName: custom-ca-bundle
          key: ca.crt
      schedule: "0 4 * * 0"  # Weekly on Sunday
+     activeDeadlineSeconds: 28800  # 8 hours for large repository
      resources:
        requests:
          memory: "1Gi"

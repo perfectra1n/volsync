@@ -116,6 +116,16 @@ type KopiaMaintenanceSpec struct {
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// ActiveDeadlineSeconds specifies the duration in seconds relative to the startTime
+	// that the job may be active before the system tries to terminate it.
+	// If not specified, defaults to 10800 (3 hours).
+	// This prevents maintenance jobs from running indefinitely.
+	// For repositories requiring longer maintenance windows, increase this value.
+	// +kubebuilder:validation:Minimum=600
+	// +kubebuilder:default=10800
+	// +optional
+	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+
 	// ServiceAccountName allows specifying a custom ServiceAccount for maintenance jobs.
 	// If not specified, a default maintenance ServiceAccount will be used.
 	// +optional
@@ -324,6 +334,14 @@ func (km *KopiaMaintenance) GetRepositorySecret() string {
 	return km.Spec.Repository.Repository
 }
 
+// GetActiveDeadlineSeconds returns the job timeout in seconds
+func (km *KopiaMaintenance) GetActiveDeadlineSeconds() int64 {
+	if km.Spec.ActiveDeadlineSeconds != nil {
+		return *km.Spec.ActiveDeadlineSeconds
+	}
+	// Default to 3 hours (10800 seconds)
+	return 10800
+}
 
 // Validate validates the KopiaMaintenance configuration
 func (km *KopiaMaintenance) Validate() error {

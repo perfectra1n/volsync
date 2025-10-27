@@ -836,7 +836,7 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 			BackoffLimit: ptr.To(int32(5)),
 			// Exponential backoff configuration
 			// Starts at 10 seconds and doubles up to 6 times (max ~10 minutes)
-			ActiveDeadlineSeconds:   ptr.To(int64(3600)), // Overall timeout of 1 hour
+			ActiveDeadlineSeconds:   ptr.To(maintenance.GetActiveDeadlineSeconds()), // Configurable timeout (default: 3 hours)
 			TTLSecondsAfterFinished: ptr.To(int32(3600)), // Clean up after 1 hour
 		},
 	}
@@ -1170,7 +1170,7 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 					// After 5 failed attempts, the job will be marked as failed
 					BackoffLimit: ptr.To(int32(5)),
 					// Overall timeout for the job
-					ActiveDeadlineSeconds: ptr.To(int64(3600)), // 1 hour timeout,
+					ActiveDeadlineSeconds: ptr.To(maintenance.GetActiveDeadlineSeconds()), // Configurable timeout (default: 3 hours)
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: func() map[string]string {
