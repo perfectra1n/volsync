@@ -1381,8 +1381,8 @@ function connect_repository {
         echo "Connecting to WebDAV repository"
         WEBDAV_CONNECT_CMD=("${KOPIA[@]}" repository connect webdav \
             --url="${WEBDAV_URL}" \
-            --username="${WEBDAV_USERNAME}" \
-            --password="${WEBDAV_PASSWORD}")
+            --webdav-username="${WEBDAV_USERNAME}" \
+            --webdav-password="${WEBDAV_PASSWORD}")
 
         local error_output
         error_output=$(execute_repository_command "WEBDAV_CONNECT_CMD" "connect" 2>&1)
