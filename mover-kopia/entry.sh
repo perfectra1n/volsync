@@ -739,6 +739,9 @@ function apply_policy_config {
       weekly=$(jq -r '.retention.keepWeekly // empty' <<<"${policy_json}" 2>/dev/null || true)
       monthly=$(jq -r '.retention.keepMonthly // empty' <<<"${policy_json}" 2>/dev/null || true)
       yearly=$(jq -r '.retention.keepYearly // empty' <<<"${policy_json}" 2>/dev/null || true)
+      if [[ -z "${yearly}" ]]; then # kopia uses keepAnnual
+        yearly=$(jq -r '.retention.keepAnnual // empty' <<<"${policy_json}" 2>/dev/null || true)
+      fi
       ignore_identical_snapshots=$(jq -r '.retention.ignoreIdenticalSnapshots // empty' <<<"${policy_json}" 2>/dev/null || true)
 
       if [[ -n "${hourly}" && "${hourly}" != "null" ]]; then
@@ -768,6 +771,9 @@ function apply_policy_config {
       # Parse compression settings safely
       local compression
       compression=$(jq -r '.compression.compressor // empty' <<<"${policy_json}" 2>/dev/null || true)
+      if [[ -z "${compression}" ]]; then
+        compression=$(jq -r '.compression.compressorName // empty' <<<"${policy_json}" 2>/dev/null || true)
+      fi
       if [[ -n "${compression}" && "${compression}" != "null" ]]; then
         # Pass compression algorithm directly to Kopia without validation
         # Kopia will validate and provide clear error messages if invalid
