@@ -854,10 +854,10 @@ function apply_policy_config {
       fi
 
       # Clean some of the current settings
-      if [[ ${#POLICY_RESET_CMD[@]} -gt 3 ]]; then
+      if [[ ${#POLICY_CLEAR_CMD[@]} -gt 1 ]]; then
         echo "Clean global policy settings..."
         echo "Policy clean command: ${POLICY_CLEAR_CMD[*]}"
-        if "${POLICY_RESET_CMD[@]}" 2>&1; then
+        if "${POLICY_CLEAR_CMD[@]}" 2>&1; then
           echo "Global policy cleaned successfully"
           ((policy_applied++))
         else
@@ -869,9 +869,9 @@ function apply_policy_config {
       fi
 
       # Apply the global policy
+      # TODO: why -gt 3?
       if [[ ${#POLICY_CMD[@]} -gt 3 ]]; then
         echo "Applying global policy settings..."
-        echo "Policy reset command: ${POLICY_CLEAR_CMD[*]}"
         echo "Policy command: ${POLICY_CMD[*]}"
         if "${POLICY_CMD[@]}" 2>&1; then
           echo "Global policy applied successfully"
