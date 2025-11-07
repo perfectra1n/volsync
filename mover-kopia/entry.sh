@@ -731,34 +731,26 @@ function apply_policy_config {
       # Build the policy set command
       declare -a POLICY_CMD
       POLICY_CMD=("${KOPIA[@]}" policy set --global)
+      declare -a POLICY_CLEAR_CMD
+      POLICY_CLEAR_CMD=("${KOPIA[@]}" policy set --global)
 
       # Parse retention settings safely
       local hourly daily weekly monthly yearly ignore_identical_snapshots
-      hourly=$(jq -r '.retention.keepHourly // empty' <<<"${policy_json}" 2>/dev/null || true)
-      daily=$(jq -r '.retention.keepDaily // empty' <<<"${policy_json}" 2>/dev/null || true)
-      weekly=$(jq -r '.retention.keepWeekly // empty' <<<"${policy_json}" 2>/dev/null || true)
-      monthly=$(jq -r '.retention.keepMonthly // empty' <<<"${policy_json}" 2>/dev/null || true)
+      hourly=$(jq -r '(try .retention.keepHourly catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+      daily=$(jq -r '(try .retention.keepDaily catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+      weekly=$(jq -r '(try .retention.keepWeekly catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+      monthly=$(jq -r '(try .retention.keepMonthly catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
       yearly=$(jq -r '.retention.keepYearly // empty' <<<"${policy_json}" 2>/dev/null || true)
       if [[ -z "${yearly}" ]]; then # kopia uses keepAnnual
-        yearly=$(jq -r '.retention.keepAnnual // empty' <<<"${policy_json}" 2>/dev/null || true)
+        yearly=$(jq -r '(try .retention.keepAnnual catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
       fi
-      ignore_identical_snapshots=$(jq -r '.retention.ignoreIdenticalSnapshots // empty' <<<"${policy_json}" 2>/dev/null || true)
+      POLICY_CMD+=(--keep-hourly="${hourly}")
+      POLICY_CMD+=(--keep-daily="${daily}")
+      POLICY_CMD+=(--keep-weekly="${weekly}")
+      POLICY_CMD+=(--keep-monthly="${monthly}")
+      POLICY_CMD+=(--keep-annual="${yearly}")
 
-      if [[ -n "${hourly}" && "${hourly}" != "null" ]]; then
-        POLICY_CMD+=(--keep-hourly="${hourly}")
-      fi
-      if [[ -n "${daily}" && "${daily}" != "null" ]]; then
-        POLICY_CMD+=(--keep-daily="${daily}")
-      fi
-      if [[ -n "${weekly}" && "${weekly}" != "null" ]]; then
-        POLICY_CMD+=(--keep-weekly="${weekly}")
-      fi
-      if [[ -n "${monthly}" && "${monthly}" != "null" ]]; then
-        POLICY_CMD+=(--keep-monthly="${monthly}")
-      fi
-      if [[ -n "${yearly}" && "${yearly}" != "null" ]]; then
-        POLICY_CMD+=(--keep-annual="${yearly}")
-      fi
+      ignore_identical_snapshots=$(jq -r '.retention.ignoreIdenticalSnapshots // empty' <<<"${policy_json}" 2>/dev/null || true)
       if [[ -n "$ignore_identical_snapshots" && "$ignore_identical_snapshots" != "null" ]]; then
         case "$ignore_identical_snapshots" in
         true | false | inherit)
@@ -766,26 +758,41 @@ function apply_policy_config {
           ;;
         *) echo "ERROR: retention.ignoreIdenticalSnapshots must be true, false, or inherit" ;;
         esac
+      else
+        POLICY_CMD+=(--ignore-identical-snapshots="inherit")
       fi
 
       # Parse compression settings safely
       local compression
       compression=$(jq -r '.compression.compressor // empty' <<<"${policy_json}" 2>/dev/null || true)
-      if [[ -z "${compression}" ]]; then
+      if [[ -z "${compression}" ]]; then # kopia uses compressorName
         compression=$(jq -r '.compression.compressorName // empty' <<<"${policy_json}" 2>/dev/null || true)
       fi
       if [[ -n "${compression}" && "${compression}" != "null" ]]; then
         # Pass compression algorithm directly to Kopia without validation
         # Kopia will validate and provide clear error messages if invalid
         POLICY_CMD+=(--compression="${compression}")
+      else
+        POLICY_CMD+=(--compression="inherit")
       fi
 
       # Parse file never compression extensions safely
+      local only_compress
+      POLICY_CLEAR_CMD+=(--clear-only-compress)
+      only_compress=$(jq -r '.compression.onlyCompress[]? // empty' <<<"${policy_json}" 3>/dev/null || true)
+      if [[ -n "${only_compress}" ]]; then
+        while IFS= read -r extension; do
+          if [[ -n "${extension}" ]]; then
+            POLICY_CMD+=(--add-only-compress="${extension}")
+          fi
+        done <<<"${only_compress}"
+      fi
+
+      # Parse file only compression extensions safely
       local never_compress
+      POLICY_CLEAR_CMD+=(--clear-never-compress)
       never_compress=$(jq -r '.compression.neverCompress[]? // empty' <<<"${policy_json}" 3>/dev/null || true)
       if [[ -n "${never_compress}" ]]; then
-        # make sure we have a clean (new) list
-        #POLICY_CMD+=(--clear-never-compress)
         while IFS= read -r extension; do
           if [[ -n "${extension}" ]]; then
             POLICY_CMD+=(--add-never-compress="${extension}")
@@ -802,6 +809,7 @@ function apply_policy_config {
 
       # Parse file ignore rules safely
       local ignore_rules
+      POLICY_CLEAR_CMD+=(--clear-ignore)
       ignore_rules=$(jq -r '.files.ignore[]? // empty' <<<"${policy_json}" 2>/dev/null || true)
       if [[ -n "${ignore_rules}" ]]; then
         while IFS= read -r rule; do
@@ -811,18 +819,59 @@ function apply_policy_config {
         done <<<"${ignore_rules}"
       fi
 
+      # Parse file dot ignore rules safely
+      local dot_ignore_rules
+      POLICY_CLEAR_CMD+=(--clear-dot-ignore)
+      dot_ignore_rules=$(jq -r '.files.ignoreDotFiles[]? // empty' <<<"${policy_json}" 2>/dev/null || true)
+      if [[ -n "${dot_ignore_rules}" ]]; then
+        while IFS= read -r rule; do
+          if [[ -n "${rule}" ]]; then
+            POLICY_CMD+=(--add-dot-ignore="${rule}")
+          fi
+        done <<<"${dot_ignore_rules}"
+      fi
+
+      local max_file_size
+      max_file_size=$(jq -r '.files.maxFileSize // empty' <<<"${policy_json}" 2>/dev/null || true)
+      if [[ -n "${max_file_size}" && "${max_file_size}" != "null" ]]; then
+        POLICY_CMD+=(--max-file-size="${max_file_size}")
+      else
+        POLICY_CMD+=(--max-file-size="inherit")
+      fi
+
       # Parse dot-file ignore settings safely
       local ignore_cache_dirs
       ignore_cache_dirs=$(jq -r '.files.ignoreCacheDirs // empty' <<<"${policy_json}" 2>/dev/null || true)
-      if [[ "${ignore_cache_dirs}" == "true" ]]; then
-        POLICY_CMD+=(--ignore-cache-dirs)
-      elif [[ "${ignore_cache_dirs}" == "false" ]]; then
-        POLICY_CMD+=(--no-ignore-cache-dirs)
+      if [[ -n "$ignore_cache_dirs" && "$ignore_cache_dirs" != "null" ]]; then
+        case "$ignore_cache_dirs" in
+        true | false | inherit)
+          POLICY_CMD+=(--ignore-cache-dirs="$ignore_cache_dirs")
+          ;;
+        *) echo "ERROR: files.ignoreCacheDirs must be true, false, or inherit" ;;
+        esac
+      else
+        POLICY_CMD+=(--ignore-cache-dirs="inherit")
+      fi
+
+      # Clean some of the current settings
+      if [[ ${#POLICY_RESET_CMD[@]} -gt 3 ]]; then
+        echo "Clean global policy settings..."
+        echo "Policy clean command: ${POLICY_CLEAR_CMD[*]}"
+        if "${POLICY_RESET_CMD[@]}" 2>&1; then
+          echo "Global policy cleaned successfully"
+          ((policy_applied++))
+        else
+          local exit_code=$?
+          echo "ERROR: Failed to clean global policy settings (exit code: ${exit_code})"
+          echo "Continuing with existing policies"
+          ((policy_errors++))
+        fi
       fi
 
       # Apply the global policy
       if [[ ${#POLICY_CMD[@]} -gt 3 ]]; then
         echo "Applying global policy settings..."
+        echo "Policy reset command: ${POLICY_CLEAR_CMD[*]}"
         echo "Policy command: ${POLICY_CMD[*]}"
         if "${POLICY_CMD[@]}" 2>&1; then
           echo "Global policy applied successfully"
