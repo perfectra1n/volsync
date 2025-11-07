@@ -779,7 +779,7 @@ function apply_policy_config {
       never_compress=$(jq -r '.compression.neverCompress[]? // empty' <<<"${policy_json}" 3>/dev/null || true)
       if [[ -n "${never_compress}" ]]; then
         # make sure we have a clean (new) list
-        POLICY_CMD+=(--clear-never-compress)
+        #POLICY_CMD+=(--clear-never-compress)
         while IFS= read -r extension; do
           if [[ -n "${extension}" ]]; then
             POLICY_CMD+=(--add-never-compress="${extension}")
