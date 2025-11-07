@@ -756,8 +756,13 @@ function apply_policy_config {
       if [[ -n "${yearly}" && "${yearly}" != "null" ]]; then
         POLICY_CMD+=(--keep-annual="${yearly}")
       fi
-      if [[ "${ignore_identical_snapshots}" == "true" ]]; then
-        POLICY_CMD+=(--ignore-identical-snapshots)
+      if [[ -n "$ignore_identical_snapshots" && "$ignore_identical_snapshots" != "null" ]]; then
+        case "$ignore_identical_snapshots" in
+        true | false | inherit)
+          POLICY_CMD+=(--ignore-identical-snapshots="$ignore_identical_snapshots")
+          ;;
+        *) echo "ERROR: retention.ignoreIdenticalSnapshots must be true, false, or inherit" ;;
+        esac
       fi
 
       # Parse compression settings safely
