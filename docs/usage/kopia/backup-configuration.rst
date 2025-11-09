@@ -557,6 +557,7 @@ policies that go beyond what's possible with inline configuration.
            "keepWeekly": 4,
            "keepMonthly": 12,
            "keepYearly": 3
+           "ignoreIdenticalSnapshots": false
          },
          "compression": {
            "compressor": "zstd",
@@ -738,11 +739,13 @@ It's applied using ``kopia policy set --global`` command:
        "keepDaily": 30,
        "keepWeekly": 8,
        "keepMonthly": 24,
-       "keepYearly": 10
+       "keepYearly": 10,
+       "ignoreIdenticalSnapshots": false
      },
      "compression": {
        "compressor": "zstd",
-       "compressionLevel": 3
+       "compressionLevel": 3,
+       "neverCompress": []
      },
      "files": {
        "ignore": [

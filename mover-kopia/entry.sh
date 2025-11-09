@@ -80,37 +80,37 @@ SCRIPT_DIR="$(dirname "$SCRIPT_FULLPATH")"
 # Do not do this debug mover code if this is already the
 # mover script copy in /tmp
 if [[ $DEBUG_MOVER -eq 1 && "$SCRIPT_DIR" != "/tmp" ]]; then
-  MOVER_SCRIPT_COPY="/tmp/$SCRIPT"
-  cp "$SCRIPT_FULLPATH" "$MOVER_SCRIPT_COPY"
+    MOVER_SCRIPT_COPY="/tmp/$SCRIPT"
+    cp "$SCRIPT_FULLPATH" "$MOVER_SCRIPT_COPY"
 
-  END_DEBUG_FILE="/tmp/exit-debug-if-removed"
-  touch $END_DEBUG_FILE
+    END_DEBUG_FILE="/tmp/exit-debug-if-removed"
+    touch $END_DEBUG_FILE
 
-  echo ""
-  echo "##################################################################"
-  echo "DEBUG_MOVER is enabled, this pod will sleep indefinitely."
-  echo ""
-  echo "The mover script that would normally run has been copied to"
-  echo "$MOVER_SCRIPT_COPY".
-  echo ""
-  echo "To debug, you can modify this file and run it with:"
-  echo "$MOVER_SCRIPT_COPY" "$@"
-  echo ""
-  echo "If you wish to exit this pod after debugging, delete the"
-  echo "file $END_DEBUG_FILE from the system."
-  echo "##################################################################"
+    echo ""
+    echo "##################################################################"
+    echo "DEBUG_MOVER is enabled, this pod will sleep indefinitely."
+    echo ""
+    echo "The mover script that would normally run has been copied to"
+    echo "$MOVER_SCRIPT_COPY".
+    echo ""
+    echo "To debug, you can modify this file and run it with:"
+    echo "$MOVER_SCRIPT_COPY" "$@"
+    echo ""
+    echo "If you wish to exit this pod after debugging, delete the"
+    echo "file $END_DEBUG_FILE from the system."
+    echo "##################################################################"
 
-  # Wait for user to delete the file before exiting
-  while [[ -f "${END_DEBUG_FILE}" ]]; do
-    sleep 10
-  done
+    # Wait for user to delete the file before exiting
+    while [[ -f "${END_DEBUG_FILE}" ]]; do
+        sleep 10
+    done
 
-  echo ""
-  echo "##################################################################"
-  echo "Debug done, exiting."
-  echo "##################################################################"
-  sleep 2
-  exit 0
+    echo ""
+    echo "##################################################################"
+    echo "Debug done, exiting."
+    echo "##################################################################"
+    sleep 2
+    exit 0
 fi
 
 declare -a KOPIA
@@ -195,8 +195,8 @@ echo "KOPIA_ENABLE_FILE_DELETION: $([ -n "${KOPIA_ENABLE_FILE_DELETION}" ] && ec
 echo "KOPIA_ADDITIONAL_ARGS: $([ -n "${KOPIA_ADDITIONAL_ARGS}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo ""
 echo "=== Log Configuration ==="
-echo "KOPIA_LOG_LEVEL: ${KOPIA_LOG_LEVEL}"  # Console/stdout log level
-echo "KOPIA_FILE_LOG_LEVEL: ${KOPIA_FILE_LOG_LEVEL}"  # File log level
+echo "KOPIA_LOG_LEVEL: ${KOPIA_LOG_LEVEL}"           # Console/stdout log level
+echo "KOPIA_FILE_LOG_LEVEL: ${KOPIA_FILE_LOG_LEVEL}" # File log level
 echo "KOPIA_LOG_DIR_MAX_FILES: ${KOPIA_LOG_DIR_MAX_FILES}"
 echo "KOPIA_LOG_DIR_MAX_AGE: ${KOPIA_LOG_DIR_MAX_AGE}"
 echo "KOPIA_CONTENT_LOG_DIR_MAX_FILES: ${KOPIA_CONTENT_LOG_DIR_MAX_FILES}"
@@ -248,7 +248,7 @@ echo "====================="
 # Print an error message and exit
 # error rc "message"
 function error {
-    echo ""  # Add blank line before error
+    echo "" # Add blank line before error
     echo "ERROR: $2"
     exit "$1"
 }
@@ -331,7 +331,7 @@ function clear_corrupted_cache {
         local now=$(date +%s)
         local elapsed=$((now - last_clear))
 
-        if [[ ${elapsed} -lt 300 ]]; then  # Less than 5 minutes
+        if [[ ${elapsed} -lt 300 ]]; then # Less than 5 minutes
             log_error "ERROR: Cache was cleared ${elapsed} seconds ago (less than 5 minutes)"
             log_error "Repeated cache corruption may indicate a deeper problem:"
             log_error "  - Filesystem issues (check dmesg)"
@@ -400,7 +400,7 @@ function clear_corrupted_cache {
 
     if [[ "${cleared_something}" == "true" ]]; then
         # Record successful cache clear for rate limiting
-        date +%s > "${cache_clear_marker}"
+        date +%s >"${cache_clear_marker}"
         log_info "Cache clearing completed. Kopia will rebuild these on next connection."
         return 0
     else
@@ -414,27 +414,27 @@ function clear_corrupted_cache {
 function execute_action {
     local action_command="$1"
     local action_type="$2"
-    
+
     if [[ -z "${action_command}" ]]; then
         return 0
     fi
-    
+
     echo "Running ${action_type} action: ${action_command}"
-    
+
     # Execute the command following Kopia's native approach
     # Kopia natively supports actions without command restrictions
     # Security is handled through:
     # 1. Container security context (non-root, limited capabilities)
-    # 2. User responsibility for action content  
+    # 2. User responsibility for action content
     # 3. Actions must be explicitly configured by users
     # 4. Container isolation limits potential damage
-    
+
     # Execute with timeout for safety and proper error handling
     if ! timeout 300 bash -c "${action_command}"; then
         echo "ERROR: ${action_type} action failed or timed out after 300 seconds"
         return 1
     fi
-    
+
     echo "${action_type} action completed successfully"
     return 0
 }
@@ -521,14 +521,14 @@ function set_client_identity {
 # add_additional_args command_array_name
 function add_additional_args {
     local -n cmd_array=$1
-    
+
     if [[ -n "${KOPIA_ADDITIONAL_ARGS}" ]]; then
         echo "Processing additional arguments..."
-        
+
         # Split the arguments using our special delimiter
         # The delimiter "|VOLSYNC_ARG_SEP|" was chosen to be unlikely to appear in actual args
-        IFS='|VOLSYNC_ARG_SEP|' read -ra ADDITIONAL_ARGS_ARRAY <<< "${KOPIA_ADDITIONAL_ARGS}"
-        
+        IFS='|VOLSYNC_ARG_SEP|' read -ra ADDITIONAL_ARGS_ARRAY <<<"${KOPIA_ADDITIONAL_ARGS}"
+
         # Add each argument to the command array
         for arg in "${ADDITIONAL_ARGS_ARRAY[@]}"; do
             if [[ -n "${arg}" ]]; then
@@ -536,7 +536,7 @@ function add_additional_args {
                 cmd_array+=("${arg}")
             fi
         done
-        
+
         echo "Added ${#ADDITIONAL_ARGS_ARRAY[@]} additional arguments"
     fi
 }
@@ -546,7 +546,7 @@ function add_additional_args {
 function execute_repository_command {
     local array_name=$1
     local -n cmd_array_ref=$array_name
-    local operation_type=$2  # "connect" or "create"
+    local operation_type=$2 # "connect" or "create"
 
     # For create operations, add manual config params
     if [[ "${operation_type}" == "create" ]]; then
@@ -565,40 +565,40 @@ function apply_manual_config {
     if [[ -n "${KOPIA_MANUAL_CONFIG}" ]]; then
         echo "=== Applying manual repository configuration ==="
         echo "Manual configuration provided, parsing JSON..."
-        
+
         # Validate JSON syntax first
         if ! echo "${KOPIA_MANUAL_CONFIG}" | jq . >/dev/null 2>&1; then
             echo "ERROR: Invalid JSON in KOPIA_MANUAL_CONFIG"
             echo "Falling back to automatic configuration"
             return 1
         fi
-        
+
         # Parse and validate manual configuration
         local manual_config="${KOPIA_MANUAL_CONFIG}"
-        
+
         # Extract configuration sections
         local encryption_config
         local compression_config
         local splitter_config
         local caching_config
-        
+
         encryption_config=$(echo "${manual_config}" | jq -r '.encryption // empty')
         compression_config=$(echo "${manual_config}" | jq -r '.compression // empty')
         splitter_config=$(echo "${manual_config}" | jq -r '.splitter // empty')
         caching_config=$(echo "${manual_config}" | jq -r '.caching // empty')
-        
+
         echo "Parsed configuration sections:"
         echo "  Encryption: ${encryption_config:+[SET]}${encryption_config:-[NOT SET]}"
         echo "  Compression: ${compression_config:+[SET]}${compression_config:-[NOT SET]}"
         echo "  Splitter: ${splitter_config:+[SET]}${splitter_config:-[NOT SET]}"
         echo "  Caching: ${caching_config:+[SET]}${caching_config:-[NOT SET]}"
-        
+
         # Store manual configuration for repository creation/connection
         export KOPIA_MANUAL_ENCRYPTION_CONFIG="${encryption_config}"
         export KOPIA_MANUAL_COMPRESSION_CONFIG="${compression_config}"
         export KOPIA_MANUAL_SPLITTER_CONFIG="${splitter_config}"
         export KOPIA_MANUAL_CACHING_CONFIG="${caching_config}"
-        
+
         echo "Manual configuration parsed and exported successfully"
         echo "Configuration will be applied during repository creation/connection"
         return 0
@@ -612,15 +612,15 @@ function apply_manual_config {
 # add_manual_config_params command_array_name
 function add_manual_config_params {
     local -n cmd_array=$1
-    
+
     if [[ -n "${KOPIA_MANUAL_CONFIG}" ]]; then
         echo "Applying manual configuration parameters to repository command..."
-        
+
         # Apply encryption configuration
         if [[ -n "${KOPIA_MANUAL_ENCRYPTION_CONFIG}" && "${KOPIA_MANUAL_ENCRYPTION_CONFIG}" != "null" ]]; then
             local encryption_algorithm
             encryption_algorithm=$(echo "${KOPIA_MANUAL_ENCRYPTION_CONFIG}" | jq -r '.algorithm // empty')
-            
+
             if [[ -n "${encryption_algorithm}" && "${encryption_algorithm}" != "null" ]]; then
                 # Pass encryption algorithm directly to Kopia without validation
                 # Kopia will validate and provide clear error messages if invalid
@@ -628,24 +628,24 @@ function add_manual_config_params {
                 cmd_array+=(--encryption="${encryption_algorithm}")
             fi
         fi
-        
+
         # Apply compression configuration
         if [[ -n "${KOPIA_MANUAL_COMPRESSION_CONFIG}" && "${KOPIA_MANUAL_COMPRESSION_CONFIG}" != "null" ]]; then
             local compression_algorithm
             local compression_min_size
             local compression_max_size
-            
+
             compression_algorithm=$(echo "${KOPIA_MANUAL_COMPRESSION_CONFIG}" | jq -r '.algorithm // empty')
             compression_min_size=$(echo "${KOPIA_MANUAL_COMPRESSION_CONFIG}" | jq -r '.minSize // empty')
             compression_max_size=$(echo "${KOPIA_MANUAL_COMPRESSION_CONFIG}" | jq -r '.maxSize // empty')
-            
+
             if [[ -n "${compression_algorithm}" && "${compression_algorithm}" != "null" ]]; then
                 # Pass compression algorithm directly to Kopia without validation
                 # Kopia will validate and provide clear error messages if invalid
                 echo "  Using compression algorithm: ${compression_algorithm}"
                 cmd_array+=(--compression="${compression_algorithm}")
             fi
-            
+
             if [[ -n "${compression_min_size}" && "${compression_min_size}" != "null" ]]; then
                 if [[ "${compression_min_size}" =~ ^[0-9]+$ ]]; then
                     echo "  Using compression minimum size: ${compression_min_size}"
@@ -654,7 +654,7 @@ function add_manual_config_params {
                     echo "  WARNING: Invalid compression min size '${compression_min_size}', must be numeric"
                 fi
             fi
-            
+
             if [[ -n "${compression_max_size}" && "${compression_max_size}" != "null" ]]; then
                 if [[ "${compression_max_size}" =~ ^[0-9]+$ ]]; then
                     echo "  Using compression maximum size: ${compression_max_size}"
@@ -664,12 +664,12 @@ function add_manual_config_params {
                 fi
             fi
         fi
-        
+
         # Apply splitter configuration
         if [[ -n "${KOPIA_MANUAL_SPLITTER_CONFIG}" && "${KOPIA_MANUAL_SPLITTER_CONFIG}" != "null" ]]; then
             local splitter_algorithm
             splitter_algorithm=$(echo "${KOPIA_MANUAL_SPLITTER_CONFIG}" | jq -r '.algorithm // empty')
-            
+
             if [[ -n "${splitter_algorithm}" && "${splitter_algorithm}" != "null" ]]; then
                 # Pass splitter algorithm directly to Kopia without validation
                 # Kopia will validate and provide clear error messages if invalid
@@ -677,10 +677,10 @@ function add_manual_config_params {
                 cmd_array+=(--object-splitter="${splitter_algorithm}")
             fi
         fi
-        
+
         # Note: Caching configuration is typically applied post-repository creation
         # via 'kopia cache set' commands, which we handle in ensure_connected
-        
+
         echo "Manual configuration parameters applied to repository command"
     fi
 }
@@ -692,14 +692,14 @@ function add_manual_config_params {
 function apply_policy_config {
     local policy_applied=0
     local policy_errors=0
-    
+
     if [[ -n "${KOPIA_CONFIG_PATH}" && -d "${KOPIA_CONFIG_PATH}" ]]; then
         echo "=== Applying policy configuration ==="
-        
+
         # Apply global policy if available
         if [[ -n "${KOPIA_GLOBAL_POLICY_FILE}" && -f "${KOPIA_GLOBAL_POLICY_FILE}" ]]; then
             echo "Found global policy file: ${KOPIA_GLOBAL_POLICY_FILE}"
-            
+
             # Validate JSON structure first
             if ! jq . "${KOPIA_GLOBAL_POLICY_FILE}" >/dev/null 2>&1; then
                 echo "ERROR: Invalid JSON in global policy file ${KOPIA_GLOBAL_POLICY_FILE}"
@@ -707,7 +707,7 @@ function apply_policy_config {
                 ((policy_errors++))
                 return 1
             fi
-            
+
             # Validate file size (max 1MB)
             local file_size
             file_size=$(stat -c%s "${KOPIA_GLOBAL_POLICY_FILE}" 2>/dev/null || stat -f%z "${KOPIA_GLOBAL_POLICY_FILE}" 2>/dev/null || echo "0")
@@ -716,9 +716,9 @@ function apply_policy_config {
                 ((policy_errors++))
                 return 1
             fi
-            
+
             echo "JSON validation passed for global policy"
-            
+
             # Parse the JSON safely using jq for all operations
             # This prevents command injection as jq handles the JSON parsing
             local policy_json
@@ -727,72 +727,149 @@ function apply_policy_config {
                 ((policy_errors++))
                 return 1
             fi
-            
+
             # Build the policy set command
             declare -a POLICY_CMD
             POLICY_CMD=("${KOPIA[@]}" policy set --global)
-            
+            declare -a POLICY_CLEAR_CMD
+            POLICY_CLEAR_CMD=("${KOPIA[@]}" policy set --global)
+
             # Parse retention settings safely
-            local hourly daily weekly monthly yearly
-            hourly=$(jq -r '.retention.keepHourly // empty' <<< "${policy_json}" 2>/dev/null || true)
-            daily=$(jq -r '.retention.keepDaily // empty' <<< "${policy_json}" 2>/dev/null || true)
-            weekly=$(jq -r '.retention.keepWeekly // empty' <<< "${policy_json}" 2>/dev/null || true)
-            monthly=$(jq -r '.retention.keepMonthly // empty' <<< "${policy_json}" 2>/dev/null || true)
-            yearly=$(jq -r '.retention.keepYearly // empty' <<< "${policy_json}" 2>/dev/null || true)
-            
-            if [[ -n "${hourly}" && "${hourly}" != "null" ]]; then
-                POLICY_CMD+=(--keep-hourly="${hourly}")
+            local hourly daily weekly monthly yearly ignore_identical_snapshots
+            hourly=$(jq -r '(try .retention.keepHourly catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+            daily=$(jq -r '(try .retention.keepDaily catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+            weekly=$(jq -r '(try .retention.keepWeekly catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+            monthly=$(jq -r '(try .retention.keepMonthly catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
+            yearly=$(jq -r '.retention.keepYearly // empty' <<<"${policy_json}" 2>/dev/null || true)
+            if [[ -z "${yearly}" ]]; then # kopia uses keepAnnual
+                yearly=$(jq -r '(try .retention.keepAnnual catch null) // "inherit"' <<<"${policy_json}" 2>/dev/null || true)
             fi
-            if [[ -n "${daily}" && "${daily}" != "null" ]]; then
-                POLICY_CMD+=(--keep-daily="${daily}")
+            POLICY_CMD+=(--keep-hourly="${hourly}")
+            POLICY_CMD+=(--keep-daily="${daily}")
+            POLICY_CMD+=(--keep-weekly="${weekly}")
+            POLICY_CMD+=(--keep-monthly="${monthly}")
+            POLICY_CMD+=(--keep-annual="${yearly}")
+
+            ignore_identical_snapshots=$(jq -r '.retention.ignoreIdenticalSnapshots // empty' <<<"${policy_json}" 2>/dev/null || true)
+            if [[ -n "$ignore_identical_snapshots" && "$ignore_identical_snapshots" != "null" ]]; then
+                case "$ignore_identical_snapshots" in
+                    true | false | inherit)
+                        POLICY_CMD+=(--ignore-identical-snapshots="$ignore_identical_snapshots")
+                        ;;
+                    *) echo "ERROR: retention.ignoreIdenticalSnapshots must be true, false, or inherit" ;;
+                esac
+            else
+                POLICY_CMD+=(--ignore-identical-snapshots="inherit")
             fi
-            if [[ -n "${weekly}" && "${weekly}" != "null" ]]; then
-                POLICY_CMD+=(--keep-weekly="${weekly}")
-            fi
-            if [[ -n "${monthly}" && "${monthly}" != "null" ]]; then
-                POLICY_CMD+=(--keep-monthly="${monthly}")
-            fi
-            if [[ -n "${yearly}" && "${yearly}" != "null" ]]; then
-                POLICY_CMD+=(--keep-annual="${yearly}")
-            fi
-            
+
             # Parse compression settings safely
             local compression
-            compression=$(jq -r '.compression.compressor // empty' <<< "${policy_json}" 2>/dev/null || true)
+            compression=$(jq -r '.compression.compressor // empty' <<<"${policy_json}" 2>/dev/null || true)
+            if [[ -z "${compression}" ]]; then # kopia uses compressorName
+                compression=$(jq -r '.compression.compressorName // empty' <<<"${policy_json}" 2>/dev/null || true)
+            fi
             if [[ -n "${compression}" && "${compression}" != "null" ]]; then
                 # Pass compression algorithm directly to Kopia without validation
                 # Kopia will validate and provide clear error messages if invalid
                 POLICY_CMD+=(--compression="${compression}")
+            else
+                POLICY_CMD+=(--compression="inherit")
             fi
-            
+
+            # Parse file never compression extensions safely
+            local only_compress
+            POLICY_CLEAR_CMD+=(--clear-only-compress)
+            only_compress=$(jq -r '.compression.onlyCompress[]? // empty' <<<"${policy_json}" 3>/dev/null || true)
+            if [[ -n "${only_compress}" ]]; then
+                while IFS= read -r extension; do
+                    if [[ -n "${extension}" ]]; then
+                        POLICY_CMD+=(--add-only-compress="${extension}")
+                    fi
+                done <<<"${only_compress}"
+            fi
+
+            # Parse file only compression extensions safely
+            local never_compress
+            POLICY_CLEAR_CMD+=(--clear-never-compress)
+            never_compress=$(jq -r '.compression.neverCompress[]? // empty' <<<"${policy_json}" 3>/dev/null || true)
+            if [[ -n "${never_compress}" ]]; then
+                while IFS= read -r extension; do
+                    if [[ -n "${extension}" ]]; then
+                        POLICY_CMD+=(--add-never-compress="${extension}")
+                    fi
+                done <<<"${never_compress}"
+            fi
+
             # Parse snapshot scheduling safely
             local snapshot_interval
-            snapshot_interval=$(jq -r '.scheduling.interval // empty' <<< "${policy_json}" 2>/dev/null || true)
+            snapshot_interval=$(jq -r '.scheduling.interval // empty' <<<"${policy_json}" 2>/dev/null || true)
             if [[ -n "${snapshot_interval}" && "${snapshot_interval}" != "null" ]]; then
                 POLICY_CMD+=(--snapshot-interval="${snapshot_interval}")
             fi
-            
+
             # Parse file ignore rules safely
             local ignore_rules
-            ignore_rules=$(jq -r '.files.ignore[]? // empty' <<< "${policy_json}" 2>/dev/null || true)
+            POLICY_CLEAR_CMD+=(--clear-ignore)
+            ignore_rules=$(jq -r '.files.ignore[]? // empty' <<<"${policy_json}" 2>/dev/null || true)
             if [[ -n "${ignore_rules}" ]]; then
                 while IFS= read -r rule; do
                     if [[ -n "${rule}" ]]; then
                         POLICY_CMD+=(--add-ignore="${rule}")
                     fi
-                done <<< "${ignore_rules}"
+                done <<<"${ignore_rules}"
             fi
-            
+
+            # Parse file dot ignore rules safely
+            local dot_ignore_rules
+            POLICY_CLEAR_CMD+=(--clear-dot-ignore)
+            dot_ignore_rules=$(jq -r '.files.ignoreDotFiles[]? // empty' <<<"${policy_json}" 2>/dev/null || true)
+            if [[ -n "${dot_ignore_rules}" ]]; then
+                while IFS= read -r rule; do
+                    if [[ -n "${rule}" ]]; then
+                        POLICY_CMD+=(--add-dot-ignore="${rule}")
+                    fi
+                done <<<"${dot_ignore_rules}"
+            fi
+
+            local max_file_size
+            max_file_size=$(jq -r '.files.maxFileSize // empty' <<<"${policy_json}" 2>/dev/null || true)
+            if [[ -n "${max_file_size}" && "${max_file_size}" != "null" ]]; then
+                POLICY_CMD+=(--max-file-size="${max_file_size}")
+            else
+                POLICY_CMD+=(--max-file-size="inherit")
+            fi
+
             # Parse dot-file ignore settings safely
             local ignore_cache_dirs
-            ignore_cache_dirs=$(jq -r '.files.ignoreCacheDirs // empty' <<< "${policy_json}" 2>/dev/null || true)
-            if [[ "${ignore_cache_dirs}" == "true" ]]; then
-                POLICY_CMD+=(--ignore-cache-dirs)
-            elif [[ "${ignore_cache_dirs}" == "false" ]]; then
-                POLICY_CMD+=(--no-ignore-cache-dirs)
+            ignore_cache_dirs=$(jq -r '.files.ignoreCacheDirs // empty' <<<"${policy_json}" 2>/dev/null || true)
+            if [[ -n "$ignore_cache_dirs" && "$ignore_cache_dirs" != "null" ]]; then
+                case "$ignore_cache_dirs" in
+                    true | false | inherit)
+                        POLICY_CMD+=(--ignore-cache-dirs="$ignore_cache_dirs")
+                        ;;
+                    *) echo "ERROR: files.ignoreCacheDirs must be true, false, or inherit" ;;
+                esac
+            else
+                POLICY_CMD+=(--ignore-cache-dirs="inherit")
             fi
-            
+
+            # Clean some of the current settings
+            if [[ ${#POLICY_CLEAR_CMD[@]} -gt 1 ]]; then
+                echo "Clean global policy settings..."
+                echo "Policy clean command: ${POLICY_CLEAR_CMD[*]}"
+                if "${POLICY_CLEAR_CMD[@]}" 2>&1; then
+                    echo "Global policy cleaned successfully"
+                    ((policy_applied++))
+                else
+                    local exit_code=$?
+                    echo "ERROR: Failed to clean global policy settings (exit code: ${exit_code})"
+                    echo "Continuing with existing policies"
+                    ((policy_errors++))
+                fi
+            fi
+
             # Apply the global policy
+            # TODO: why -gt 3?
             if [[ ${#POLICY_CMD[@]} -gt 3 ]]; then
                 echo "Applying global policy settings..."
                 echo "Policy command: ${POLICY_CMD[*]}"
@@ -809,18 +886,18 @@ function apply_policy_config {
                 echo "No valid global policy settings found in file"
             fi
         fi
-        
-        # Apply repository configuration if available  
+
+        # Apply repository configuration if available
         if [[ -n "${KOPIA_REPOSITORY_CONFIG_FILE}" && -f "${KOPIA_REPOSITORY_CONFIG_FILE}" ]]; then
             echo "Found repository configuration file: ${KOPIA_REPOSITORY_CONFIG_FILE}"
-            
+
             # Validate JSON structure
             if ! jq . "${KOPIA_REPOSITORY_CONFIG_FILE}" >/dev/null 2>&1; then
                 echo "ERROR: Invalid JSON in repository config file ${KOPIA_REPOSITORY_CONFIG_FILE}"
                 echo "Continuing without repository configuration"
                 return 1
             fi
-            
+
             # Parse repository config safely
             local repo_config
             if ! repo_config=$(jq -c . "${KOPIA_REPOSITORY_CONFIG_FILE}" 2>&1); then
@@ -828,11 +905,11 @@ function apply_policy_config {
                 ((policy_errors++))
                 return 1
             fi
-            
+
             # Parse and apply repository-specific settings
             # Enable/disable actions safely
             local enable_actions
-            enable_actions=$(jq -r '.enableActions // empty' <<< "${repo_config}" 2>/dev/null || true)
+            enable_actions=$(jq -r '.enableActions // empty' <<<"${repo_config}" 2>/dev/null || true)
             if [[ "${enable_actions}" == "true" ]]; then
                 echo "Actions enabled in repository configuration"
                 export KOPIA_ACTIONS_ENABLED="true"
@@ -840,36 +917,36 @@ function apply_policy_config {
                 echo "Actions disabled in repository configuration"
                 export KOPIA_ACTIONS_ENABLED="false"
             fi
-            
+
             # Parse upload speed limits safely
             local upload_speed
-            upload_speed=$(jq -r '.uploadSpeed // empty' <<< "${repo_config}" 2>/dev/null || true)
+            upload_speed=$(jq -r '.uploadSpeed // empty' <<<"${repo_config}" 2>/dev/null || true)
             if [[ -n "${upload_speed}" && "${upload_speed}" != "null" ]]; then
                 echo "Setting upload speed limit: ${upload_speed}"
                 export KOPIA_UPLOAD_SPEED="${upload_speed}"
             fi
-            
+
             # Parse download speed limits safely
             local download_speed
-            download_speed=$(jq -r '.downloadSpeed // empty' <<< "${repo_config}" 2>/dev/null || true)
+            download_speed=$(jq -r '.downloadSpeed // empty' <<<"${repo_config}" 2>/dev/null || true)
             if [[ -n "${download_speed}" && "${download_speed}" != "null" ]]; then
                 echo "Setting download speed limit: ${download_speed}"
                 export KOPIA_DOWNLOAD_SPEED="${download_speed}"
             fi
-            
+
             echo "Repository configuration applied"
             ((policy_applied++))
         fi
-        
+
         # Report summary
         echo "Policy configuration summary: ${policy_applied} applied, ${policy_errors} errors"
-        
+
         # Return failure if all policies failed
         if [[ ${policy_applied} -eq 0 && ${policy_errors} -gt 0 ]]; then
             return 1
         fi
     fi
-    
+
     return 0
 }
 
@@ -880,25 +957,25 @@ function apply_policy_config {
 function apply_json_repository_config {
     if [[ -n "${KOPIA_STRUCTURED_REPOSITORY_CONFIG}" ]]; then
         echo "=== Applying JSON repository configuration ==="
-        
+
         # Validate JSON syntax
         if ! echo "${KOPIA_STRUCTURED_REPOSITORY_CONFIG}" | jq . >/dev/null 2>&1; then
             echo "ERROR: Invalid JSON in KOPIA_STRUCTURED_REPOSITORY_CONFIG"
             return 1
         fi
-        
+
         echo "JSON configuration validated"
-        
+
         # Write JSON to temp file for kopia native consumption
         local temp_config="/tmp/kopia-repo-config.json"
-        echo "${KOPIA_STRUCTURED_REPOSITORY_CONFIG}" > "${temp_config}"
-        chmod 600 "${temp_config}"  # Secure the config file
-        
-        echo "JSON configuration ready for kopia native consumption ($(wc -c < "${temp_config}") bytes)"
-        
+        echo "${KOPIA_STRUCTURED_REPOSITORY_CONFIG}" >"${temp_config}"
+        chmod 600 "${temp_config}" # Secure the config file
+
+        echo "JSON configuration ready for kopia native consumption ($(wc -c <"${temp_config}") bytes)"
+
         # Set environment variable for connection logic to use
         export KOPIA_JSON_CONFIG_FILE="${temp_config}"
-        
+
         echo "=== JSON configuration prepared ==="
     fi
 }
@@ -943,11 +1020,11 @@ function check_s3_prefix_conflicts {
 function apply_compression_policy {
     if [[ -n "${KOPIA_COMPRESSION}" ]]; then
         echo "=== Applying compression policy ==="
-        
+
         # No validation needed - Kopia will validate the algorithm
         # This provides better flexibility and ensures we support all current
         # and future Kopia compression algorithms without maintenance
-        
+
         # Determine the path to set compression policy for
         local target_path
         if [[ -n "${KOPIA_SOURCE_PATH_OVERRIDE}" ]]; then
@@ -957,7 +1034,7 @@ function apply_compression_policy {
             target_path="${DATA_DIR}"
             echo "Using data directory for compression policy: ${target_path}"
         fi
-        
+
         # Apply compression policy to the specific path
         echo "Setting compression algorithm '${KOPIA_COMPRESSION}' for path '${target_path}'"
         if ! "${KOPIA[@]}" policy set "${target_path}" --compression="${KOPIA_COMPRESSION}"; then
@@ -965,7 +1042,7 @@ function apply_compression_policy {
             echo "Note: Kopia will validate the compression algorithm and provide specific error messages"
             return 1
         fi
-        
+
         echo "Compression policy applied successfully"
     fi
     return 0
@@ -974,13 +1051,13 @@ function apply_compression_policy {
 function ensure_connected {
     log_info "=== Starting repository connection process ==="
     local connection_start_time=$(date +%s)
-    
+
     # Apply JSON repository configuration first
     apply_json_repository_config
-    
+
     # Apply manual configuration (parses JSON and sets environment variables)
     apply_manual_config
-    
+
     # Try to connect to existing repository (let errors display naturally)
     log_info "Checking existing repository connection status..."
     local status_check_start=$(date +%s)
@@ -999,7 +1076,7 @@ function ensure_connected {
 
         # Disable exit on error for connection attempts
         set +e
-        
+
         # Try JSON config file first if available
         if [[ -n "${KOPIA_JSON_CONFIG_FILE}" && -f "${KOPIA_JSON_CONFIG_FILE}" ]]; then
             log_info "Attempting to connect using JSON configuration file..."
@@ -1013,17 +1090,17 @@ function ensure_connected {
             local json_result=$?
             local json_connect_end=$(date +%s)
             log_timing "JSON config connection attempt took $((json_connect_end - json_connect_start)) seconds"
-            
+
             if [[ $json_result -ne 0 ]]; then
                 echo "JSON config connection failed, trying other methods..."
                 echo ""
             else
                 echo "JSON config connection successful"
-                set -e  # Re-enable exit on error
+                set -e # Re-enable exit on error
                 return 0
             fi
         fi
-        
+
         # Try to connect from legacy config file
         if [[ -f /credentials/repository.config ]]; then
             log_info "Attempting to connect from config file..."
@@ -1037,7 +1114,7 @@ function ensure_connected {
             local config_result=$?
             local config_connect_end=$(date +%s)
             log_timing "Config file connection attempt took $((config_connect_end - config_connect_start)) seconds"
-            
+
             if [[ $config_result -ne 0 ]]; then
                 log_info "Config connection failed, trying direct connection..."
                 echo ""
@@ -1069,7 +1146,7 @@ function ensure_connected {
                     local create_repo_end=$(date +%s)
                     log_timing "Repository creation attempt took $((create_repo_end - create_repo_start)) seconds"
                     if [[ $create_result -ne 0 ]]; then
-                        set -e  # Re-enable exit on error
+                        set -e # Re-enable exit on error
                         error 1 "Failed to create repository"
                     fi
                 fi
@@ -1099,12 +1176,12 @@ function ensure_connected {
                 create_repository
                 local create_result=$?
                 if [[ $create_result -ne 0 ]]; then
-                    set -e  # Re-enable exit on error
+                    set -e # Re-enable exit on error
                     error 1 "Failed to create repository"
                 fi
             fi
         fi
-        
+
         # Re-enable exit on error
         set -e
     else
@@ -1112,7 +1189,7 @@ function ensure_connected {
         log_timing "Repository status check took $((status_check_end - status_check_start)) seconds (already connected)"
         log_info "Repository already connected"
     fi
-    
+
     echo ""
 
     # Set client identity after successful connection (for snapshot ownership)
@@ -1128,14 +1205,14 @@ function ensure_connected {
     local cache_start_time=$(date +%s)
     declare -a CACHE_CMD
     CACHE_CMD=("${KOPIA[@]}" cache set --cache-directory="${KOPIA_CACHE_DIR}")
-    
+
     # Apply manual cache configuration if specified
     if [[ -n "${KOPIA_MANUAL_CACHING_CONFIG}" && "${KOPIA_MANUAL_CACHING_CONFIG}" != "null" ]]; then
         echo "Applying manual cache configuration..."
-        
+
         local max_cache_size
         max_cache_size=$(echo "${KOPIA_MANUAL_CACHING_CONFIG}" | jq -r '.maxCacheSize // empty')
-        
+
         if [[ -n "${max_cache_size}" && "${max_cache_size}" != "null" ]]; then
             if [[ "${max_cache_size}" =~ ^[0-9]+$ ]]; then
                 echo "  Using maximum cache size: ${max_cache_size} bytes"
@@ -1145,7 +1222,7 @@ function ensure_connected {
             fi
         fi
     fi
-    
+
     log_debug "Executing cache command: ${CACHE_CMD[*]}"
     if ! "${CACHE_CMD[@]}"; then
         error 1 "Failed to set cache directory"
@@ -1157,7 +1234,7 @@ function ensure_connected {
     local connection_end_time=$(date +%s)
     log_timing "Total repository connection process took $((connection_end_time - connection_start_time)) seconds"
     echo ""
-    
+
     # Apply policy configuration after connection
     # Run this after cache configuration to ensure policies are applied to connected repo
     apply_policy_config || echo "Warning: Policy configuration had issues but continuing"
@@ -1198,49 +1275,49 @@ function connect_repository {
             fi
             echo "Extracted S3 bucket from repository URL: ${S3_BUCKET}"
         fi
-        
+
         if [[ -z "${S3_BUCKET}" ]]; then
             echo "ERROR: Could not determine S3 bucket name"
             return 1
         fi
-        
+
         # Use KOPIA_S3_ENDPOINT if set, otherwise fall back to AWS_S3_ENDPOINT, otherwise use default
         local S3_ENDPOINT="${KOPIA_S3_ENDPOINT:-${AWS_S3_ENDPOINT:-s3.amazonaws.com}}"
-        
+
         # Strip protocol from endpoint if present (Kopia expects hostname only)
         S3_ENDPOINT=$(echo "${S3_ENDPOINT}" | sed 's|^https\?://||')
         echo "Resolved S3_ENDPOINT: ${S3_ENDPOINT}"
-        
+
         S3_CONNECT_CMD=("${KOPIA[@]}" repository connect s3)
-        
+
         # Add required parameters with validation
         if [[ -n "${S3_BUCKET}" ]]; then
             S3_CONNECT_CMD+=(--bucket="${S3_BUCKET}")
         fi
-        
+
         if [[ -n "${S3_ENDPOINT}" ]]; then
             S3_CONNECT_CMD+=(--endpoint="${S3_ENDPOINT}")
         fi
-        
+
         if [[ -n "${AWS_ACCESS_KEY_ID}" ]]; then
             S3_CONNECT_CMD+=(--access-key="${AWS_ACCESS_KEY_ID}")
         fi
-        
+
         if [[ -n "${AWS_SECRET_ACCESS_KEY}" ]]; then
             S3_CONNECT_CMD+=(--secret-access-key="${AWS_SECRET_ACCESS_KEY}")
         fi
-        
+
         # Add optional AWS region (support both naming conventions)
         local AWS_REGION_VALUE="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
         if [[ -n "${AWS_REGION_VALUE}" ]]; then
             S3_CONNECT_CMD+=(--region="${AWS_REGION_VALUE}")
         fi
-        
+
         # Add optional AWS session token
         if [[ -n "${AWS_SESSION_TOKEN}" ]]; then
             S3_CONNECT_CMD+=(--session-token="${AWS_SESSION_TOKEN}")
         fi
-        
+
         # Extract prefix from KOPIA_REPOSITORY (e.g., s3://bucket/prefix -> prefix)
         if [[ "${KOPIA_REPOSITORY}" =~ s3://[^/]+/(.+) ]]; then
             S3_PREFIX="${BASH_REMATCH[1]}"
@@ -1269,18 +1346,18 @@ function connect_repository {
         else
             echo "No S3 prefix detected in KOPIA_REPOSITORY"
         fi
-        
+
         # Add disable TLS flag if specified (support both naming conventions)
         if [[ "${KOPIA_S3_DISABLE_TLS}" == "true" ]] || [[ "${AWS_S3_DISABLE_TLS}" == "true" ]]; then
             S3_CONNECT_CMD+=(--disable-tls)
         fi
-        
+
         # Add custom CA certificate if specified
         if [[ -n "${CUSTOM_CA}" ]] && [[ -f "${CUSTOM_CA}" ]]; then
             echo "Adding custom CA certificate for S3 connection: ${CUSTOM_CA}"
             S3_CONNECT_CMD+=(--root-ca-pem-path="${CUSTOM_CA}")
         fi
-        
+
         echo "=== End S3 Connection Debug ==="
         echo ""
         echo "Executing connection command..."
@@ -1296,15 +1373,15 @@ function connect_repository {
         # Check for cache corruption errors
         if [[ $connect_result -ne 0 ]] && is_cache_corruption_error "${error_output}"; then
             log_warn "Cache corruption detected. Will attempt recovery."
-            return 2  # Special return code for cache corruption
+            return 2 # Special return code for cache corruption
         fi
 
         return $connect_result
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Connecting to Azure repository"
-        AZURE_CONNECT_CMD=("${KOPIA[@]}" repository connect azure \
-            --container="${KOPIA_AZURE_CONTAINER}" \
-            --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
+        AZURE_CONNECT_CMD=("${KOPIA[@]}" repository connect azure
+            --container="${KOPIA_AZURE_CONTAINER}"
+            --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}"
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
 
         local error_output
@@ -1318,8 +1395,8 @@ function connect_repository {
         return $connect_result
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Connecting to GCS repository"
-        GCS_CONNECT_CMD=("${KOPIA[@]}" repository connect gcs \
-            --bucket="${KOPIA_GCS_BUCKET}" \
+        GCS_CONNECT_CMD=("${KOPIA[@]}" repository connect gcs
+            --bucket="${KOPIA_GCS_BUCKET}"
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
 
         local error_output
@@ -1363,9 +1440,9 @@ function connect_repository {
         return $connect_result
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Connecting to Backblaze B2 repository"
-        B2_CONNECT_CMD=("${KOPIA[@]}" repository connect b2 \
-            --bucket="${KOPIA_B2_BUCKET}" \
-            --key-id="${B2_ACCOUNT_ID}" \
+        B2_CONNECT_CMD=("${KOPIA[@]}" repository connect b2
+            --bucket="${KOPIA_B2_BUCKET}"
+            --key-id="${B2_ACCOUNT_ID}"
             --key="${B2_APPLICATION_KEY}")
 
         local error_output
@@ -1379,9 +1456,9 @@ function connect_repository {
         return $connect_result
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Connecting to WebDAV repository"
-        WEBDAV_CONNECT_CMD=("${KOPIA[@]}" repository connect webdav \
-            --url="${WEBDAV_URL}" \
-            --webdav-username="${WEBDAV_USERNAME}" \
+        WEBDAV_CONNECT_CMD=("${KOPIA[@]}" repository connect webdav
+            --url="${WEBDAV_URL}"
+            --webdav-username="${WEBDAV_USERNAME}"
             --webdav-password="${WEBDAV_PASSWORD}")
 
         local error_output
@@ -1395,9 +1472,9 @@ function connect_repository {
         return $connect_result
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Connecting to SFTP repository"
-        SFTP_CONNECT_CMD=("${KOPIA[@]}" repository connect sftp \
-            --host="${SFTP_HOST}" \
-            --username="${SFTP_USERNAME}" \
+        SFTP_CONNECT_CMD=("${KOPIA[@]}" repository connect sftp
+            --host="${SFTP_HOST}"
+            --username="${SFTP_USERNAME}"
             --path="${SFTP_PATH}")
         if [[ -n "${SFTP_PORT}" ]]; then
             SFTP_CONNECT_CMD+=(--port="${SFTP_PORT}")
@@ -1426,7 +1503,7 @@ function connect_repository {
         return $connect_result
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Connecting to Rclone repository"
-        RCLONE_CONNECT_CMD=("${KOPIA[@]}" repository connect rclone \
+        RCLONE_CONNECT_CMD=("${KOPIA[@]}" repository connect rclone
             --remote-path="${RCLONE_REMOTE_PATH}")
         if [[ -n "${RCLONE_EXE}" ]]; then
             RCLONE_CONNECT_CMD+=(--rclone-exe="${RCLONE_EXE}")
@@ -1446,8 +1523,8 @@ function connect_repository {
         return $connect_result
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Connecting to Google Drive repository"
-        GDRIVE_CONNECT_CMD=("${KOPIA[@]}" repository connect gdrive \
-            --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
+        GDRIVE_CONNECT_CMD=("${KOPIA[@]}" repository connect gdrive
+            --folder-id="${GOOGLE_DRIVE_FOLDER_ID}"
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
 
         local error_output
@@ -1506,53 +1583,53 @@ function create_repository {
             fi
             echo "Extracted S3 bucket from repository URL: ${S3_BUCKET}"
         fi
-        
+
         if [[ -z "${S3_BUCKET}" ]]; then
             echo "ERROR: Could not determine S3 bucket name"
             return 1
         fi
-        
+
         # Use KOPIA_S3_ENDPOINT if set, otherwise fall back to AWS_S3_ENDPOINT, otherwise use default
         local S3_ENDPOINT="${KOPIA_S3_ENDPOINT:-${AWS_S3_ENDPOINT:-s3.amazonaws.com}}"
-        
+
         # Strip protocol from endpoint if present (Kopia expects hostname only)
         S3_ENDPOINT=$(echo "${S3_ENDPOINT}" | sed 's|^https\?://||')
         echo "Resolved S3_ENDPOINT: ${S3_ENDPOINT}"
-        
+
         S3_CREATE_CMD=("${KOPIA[@]}" repository create s3)
-        
+
         # Add required parameters with validation
         if [[ -n "${S3_BUCKET}" ]]; then
             S3_CREATE_CMD+=(--bucket="${S3_BUCKET}")
         fi
-        
+
         if [[ -n "${S3_ENDPOINT}" ]]; then
             S3_CREATE_CMD+=(--endpoint="${S3_ENDPOINT}")
         fi
-        
+
         if [[ -n "${AWS_ACCESS_KEY_ID}" ]]; then
             S3_CREATE_CMD+=(--access-key="${AWS_ACCESS_KEY_ID}")
         fi
-        
+
         if [[ -n "${AWS_SECRET_ACCESS_KEY}" ]]; then
             S3_CREATE_CMD+=(--secret-access-key="${AWS_SECRET_ACCESS_KEY}")
         fi
-        
+
         if [[ -n "${KOPIA_CACHE_DIR}" ]]; then
             S3_CREATE_CMD+=(--cache-directory="${KOPIA_CACHE_DIR}")
         fi
-        
+
         # Add optional AWS region (support both naming conventions)
         local AWS_REGION_VALUE="${AWS_REGION:-${AWS_DEFAULT_REGION}}"
         if [[ -n "${AWS_REGION_VALUE}" ]]; then
             S3_CREATE_CMD+=(--region="${AWS_REGION_VALUE}")
         fi
-        
+
         # Add optional AWS session token
         if [[ -n "${AWS_SESSION_TOKEN}" ]]; then
             S3_CREATE_CMD+=(--session-token="${AWS_SESSION_TOKEN}")
         fi
-        
+
         # Extract prefix from KOPIA_REPOSITORY (e.g., s3://bucket/prefix -> prefix)
         if [[ "${KOPIA_REPOSITORY}" =~ s3://[^/]+/(.+) ]]; then
             S3_PREFIX="${BASH_REMATCH[1]}"
@@ -1581,33 +1658,33 @@ function create_repository {
         else
             echo "No S3 prefix detected in KOPIA_REPOSITORY"
         fi
-        
+
         # Add disable TLS flag if specified (support both naming conventions)
         if [[ "${KOPIA_S3_DISABLE_TLS}" == "true" ]] || [[ "${AWS_S3_DISABLE_TLS}" == "true" ]]; then
             S3_CREATE_CMD+=(--disable-tls)
         fi
-        
+
         # Add custom CA certificate if specified
         if [[ -n "${CUSTOM_CA}" ]] && [[ -f "${CUSTOM_CA}" ]]; then
             echo "Adding custom CA certificate for S3 repository creation: ${CUSTOM_CA}"
             S3_CREATE_CMD+=(--root-ca-pem-path="${CUSTOM_CA}")
         fi
-        
+
         echo "=== End S3 Creation Debug ==="
         echo ""
         echo "Executing creation command..."
         execute_repository_command "S3_CREATE_CMD" "create"
     elif [[ -n "${KOPIA_AZURE_CONTAINER}" ]]; then
         echo "Creating Azure repository"
-        AZURE_CREATE_CMD=("${KOPIA[@]}" repository create azure \
-            --container="${KOPIA_AZURE_CONTAINER}" \
-            --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}" \
+        AZURE_CREATE_CMD=("${KOPIA[@]}" repository create azure
+            --container="${KOPIA_AZURE_CONTAINER}"
+            --storage-account="${KOPIA_AZURE_STORAGE_ACCOUNT}"
             --storage-key="${KOPIA_AZURE_STORAGE_KEY}")
         execute_repository_command "AZURE_CREATE_CMD" "create"
     elif [[ -n "${KOPIA_GCS_BUCKET}" ]]; then
         echo "Creating GCS repository"
-        GCS_CREATE_CMD=("${KOPIA[@]}" repository create gcs \
-            --bucket="${KOPIA_GCS_BUCKET}" \
+        GCS_CREATE_CMD=("${KOPIA[@]}" repository create gcs
+            --bucket="${KOPIA_GCS_BUCKET}"
             --credentials-file="${GOOGLE_APPLICATION_CREDENTIALS}")
         execute_repository_command "GCS_CREATE_CMD" "create"
     elif [[ "${KOPIA_REPOSITORY}" =~ ^filesystem:// ]]; then
@@ -1621,35 +1698,35 @@ function create_repository {
             echo "ERROR: Invalid filesystem URL format. Expected filesystem:///path"
             return 1
         fi
-        
+
         # Validate path for security (no path traversal)
         if [[ "${FS_PATH}" =~ \.\./ ]] || [[ ! "${FS_PATH}" =~ ^/ ]]; then
             echo "ERROR: Invalid filesystem path. Path must be absolute and cannot contain .."
             return 1
         fi
-        
+
         echo "Using filesystem path: ${FS_PATH}"
         FS_CREATE_CMD=("${KOPIA[@]}" repository create filesystem --path="${FS_PATH}")
         execute_repository_command "FS_CREATE_CMD" "create"
     elif [[ -n "${KOPIA_B2_BUCKET}" ]]; then
         echo "Creating Backblaze B2 repository"
-        B2_CREATE_CMD=("${KOPIA[@]}" repository create b2 \
-            --bucket="${KOPIA_B2_BUCKET}" \
-            --key-id="${B2_ACCOUNT_ID}" \
+        B2_CREATE_CMD=("${KOPIA[@]}" repository create b2
+            --bucket="${KOPIA_B2_BUCKET}"
+            --key-id="${B2_ACCOUNT_ID}"
             --key="${B2_APPLICATION_KEY}")
         execute_repository_command "B2_CREATE_CMD" "create"
     elif [[ -n "${WEBDAV_URL}" ]]; then
         echo "Creating WebDAV repository"
-        WEBDAV_CREATE_CMD=("${KOPIA[@]}" repository create webdav \
-            --url="${WEBDAV_URL}" \
-            --webdav-username="${WEBDAV_USERNAME}" \
+        WEBDAV_CREATE_CMD=("${KOPIA[@]}" repository create webdav
+            --url="${WEBDAV_URL}"
+            --webdav-username="${WEBDAV_USERNAME}"
             --webdav-password="${WEBDAV_PASSWORD}")
         execute_repository_command "WEBDAV_CREATE_CMD" "create"
     elif [[ -n "${SFTP_HOST}" ]]; then
         echo "Creating SFTP repository"
-        SFTP_CREATE_CMD=("${KOPIA[@]}" repository create sftp \
-            --host="${SFTP_HOST}" \
-            --username="${SFTP_USERNAME}" \
+        SFTP_CREATE_CMD=("${KOPIA[@]}" repository create sftp
+            --host="${SFTP_HOST}"
+            --username="${SFTP_USERNAME}"
             --path="${SFTP_PATH}")
         if [[ -n "${SFTP_PORT}" ]]; then
             SFTP_CREATE_CMD+=(--port="${SFTP_PORT}")
@@ -1669,7 +1746,7 @@ function create_repository {
         execute_repository_command "SFTP_CREATE_CMD" "create"
     elif [[ -n "${RCLONE_REMOTE_PATH}" ]]; then
         echo "Creating Rclone repository"
-        RCLONE_CREATE_CMD=("${KOPIA[@]}" repository create rclone \
+        RCLONE_CREATE_CMD=("${KOPIA[@]}" repository create rclone
             --remote-path="${RCLONE_REMOTE_PATH}")
         if [[ -n "${RCLONE_EXE}" ]]; then
             RCLONE_CREATE_CMD+=(--rclone-exe="${RCLONE_EXE}")
@@ -1680,8 +1757,8 @@ function create_repository {
         execute_repository_command "RCLONE_CREATE_CMD" "create"
     elif [[ -n "${GOOGLE_DRIVE_FOLDER_ID}" ]]; then
         echo "Creating Google Drive repository"
-        GDRIVE_CREATE_CMD=("${KOPIA[@]}" repository create gdrive \
-            --folder-id="${GOOGLE_DRIVE_FOLDER_ID}" \
+        GDRIVE_CREATE_CMD=("${KOPIA[@]}" repository create gdrive
+            --folder-id="${GOOGLE_DRIVE_FOLDER_ID}"
             --credentials-file="${GOOGLE_DRIVE_CREDENTIALS}")
         execute_repository_command "GDRIVE_CREATE_CMD" "create"
     else
@@ -1692,30 +1769,30 @@ function create_repository {
 function do_backup {
     log_info "=== Starting backup operation ==="
     local backup_start_time=$(date +%s)
-    
+
     # Apply compression policy after connection but before backup
     if ! apply_compression_policy; then
         error 1 "Failed to apply compression policy"
     fi
-    
+
     # Build snapshot command with options
     declare -a SNAPSHOT_CMD
     SNAPSHOT_CMD=("${KOPIA[@]}" "snapshot" "create" "${DATA_DIR}")
-    
+
     # Add compression algorithm if specified
     # Note: compression is typically set at repository level during creation
     # For now, skipping per-snapshot compression to avoid compatibility issues
-    
+
     # Add parallelism if specified
     if [[ -n "${KOPIA_PARALLELISM}" ]]; then
         SNAPSHOT_CMD+=(--parallel="${KOPIA_PARALLELISM}")
     fi
-    
+
     # Add upload speed limit if configured
     if [[ -n "${KOPIA_UPLOAD_SPEED}" ]]; then
         SNAPSHOT_CMD+=(--upload-speed="${KOPIA_UPLOAD_SPEED}")
     fi
-    
+
     # Add source path override if specified
     if [[ -n "${KOPIA_SOURCE_PATH_OVERRIDE}" ]]; then
         echo "Using source path override: ${KOPIA_SOURCE_PATH_OVERRIDE}"
@@ -1727,14 +1804,14 @@ function do_backup {
 
     # Add additional arguments if specified
     add_additional_args SNAPSHOT_CMD
-    
+
     # Run before-snapshot action if specified (check if actions are enabled)
     if [[ -n "${KOPIA_BEFORE_SNAPSHOT}" ]] && [[ "${KOPIA_ACTIONS_ENABLED}" != "false" ]]; then
         if ! execute_action "${KOPIA_BEFORE_SNAPSHOT}" "before-snapshot"; then
             error 1 "Before-snapshot action failed"
         fi
     fi
-    
+
     # Create snapshot with error handling - ensure real-time progress output
     # Execute with explicit file descriptor handling to ensure real-time output
     log_info "Creating snapshot for ${KOPIA_OVERRIDE_USERNAME:-$(whoami)}@${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}:${KOPIA_SOURCE_PATH_OVERRIDE:-$DATA_DIR}"
@@ -1752,7 +1829,7 @@ function do_backup {
     local snapshot_end_time=$(date +%s)
     log_timing "Snapshot creation completed in $((snapshot_end_time - snapshot_start_time)) seconds"
     log_info "Snapshot created successfully"
-    
+
     # Run after-snapshot action if specified (check if actions are enabled)
     if [[ -n "${KOPIA_AFTER_SNAPSHOT}" ]] && [[ "${KOPIA_ACTIONS_ENABLED}" != "false" ]]; then
         if ! execute_action "${KOPIA_AFTER_SNAPSHOT}" "after-snapshot"; then
@@ -1883,7 +1960,7 @@ function do_retention {
 
     declare -a POLICY_CMD
     POLICY_CMD=("${KOPIA[@]}" "policy" "set" "${DATA_DIR}")
-    
+
     # Build retention policy options
     if [[ -n "${KOPIA_RETAIN_HOURLY}" ]]; then
         POLICY_CMD+=(--keep-hourly="${KOPIA_RETAIN_HOURLY}")
@@ -1921,42 +1998,42 @@ function do_retention {
 function discover_available_snapshots {
     echo ""
     echo "=== Discovery Mode: Available Snapshots ==="
-    
+
     # List all snapshots in the repository (not just for our path)
     echo "Listing all available snapshot identities in the repository..."
-    
+
     # Use kopia snapshot list without path to see all snapshots
     # Output in JSON for parsing by the controller
     local all_snapshots
     all_snapshots=$("${KOPIA[@]}" snapshot list --all --json 2>/dev/null || true)
-    
+
     if [[ -n "${all_snapshots}" ]] && [[ "${all_snapshots}" != "[]" ]]; then
         echo "Found snapshots in repository:"
         echo ""
-        
+
         # Output raw JSON for controller parsing
         echo "${all_snapshots}" | jq -c '.[] | {id: .id, userName: .source.userName, hostName: .source.host, path: .source.path, startTime: .startTime, endTime: .endTime}' 2>/dev/null || true
-        
+
         echo ""
         echo "Available identities (username@hostname combinations):"
         # Also provide human-readable summary
         echo "${all_snapshots}" | jq -r '.[] | "\(.source.userName)@\(.source.host):\(.source.path) - Last snapshot: \(.endTime)"' | sort -u 2>/dev/null || true
     else
         echo "No snapshots found in the repository"
-        
+
         # Try to list repository manifests for debugging
         echo ""
         echo "Repository status:"
         "${KOPIA[@]}" repository status 2>&1 || true
     fi
-    
+
     echo "=== End Discovery Mode ==="
     echo ""
 }
 
 function select_snapshot_to_restore {
     echo "Selecting snapshot to restore" >&2
-    
+
     # Build the full identity string for listing snapshots
     # When using overrides, we need to specify the full identity: username@hostname:path
     local identity_string=""
@@ -1974,7 +2051,7 @@ function select_snapshot_to_restore {
     else
         snapshot_path="${DATA_DIR}"
     fi
-    
+
     if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] && [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
         identity_string="${KOPIA_OVERRIDE_USERNAME}@${KOPIA_OVERRIDE_HOSTNAME}:${snapshot_path}"
         echo "Looking for snapshots with identity: ${identity_string}" >&2
@@ -1982,27 +2059,27 @@ function select_snapshot_to_restore {
         # No overrides, use default behavior
         identity_string="${snapshot_path}"
     fi
-    
+
     # List snapshots for the specific identity
     local snapshot_list_cmd=("${KOPIA[@]}" snapshot list "${identity_string}" --json)
-    
+
     # Get the base offset from KOPIA_PREVIOUS parameter (defaults to 0)
     local -i previous_offset=${KOPIA_PREVIOUS-0}
-    
+
     # List snapshots and find the appropriate one
     # Capture both stdout and stderr to handle cases where no snapshots exist
     local snapshot_output
     local snapshot_stderr
     snapshot_output=$("${snapshot_list_cmd[@]}" 2>&1) || true
-    
+
     # Check if the output indicates no snapshots found
-    if [[ "${snapshot_output}" == $'[\n]' ]] || [[ "${snapshot_output}" == "" ]] || 
-       [[ "${snapshot_output}" =~ "unable to find snapshots" ]] || 
-       [[ "${snapshot_output}" =~ "no snapshot manifests found" ]]; then
+    if [[ "${snapshot_output}" == $'[\n]' ]] || [[ "${snapshot_output}" == "" ]] ||
+        [[ "${snapshot_output}" =~ "unable to find snapshots" ]] ||
+        [[ "${snapshot_output}" =~ "no snapshot manifests found" ]]; then
         # No snapshots found for this identity
         return 0
     fi
-    
+
     # Parse the JSON output
     if [[ -n "${KOPIA_RESTORE_AS_OF}" ]]; then
         echo "Restoring as of: ${KOPIA_RESTORE_AS_OF}" >&2
@@ -2027,12 +2104,12 @@ function select_snapshot_to_restore {
 function do_restore {
     log_info "=== Starting restore operation ==="
     local restore_start_time=$(date +%s)
-    
+
     # Apply compression policy after connection (if set for destination)
     if ! apply_compression_policy; then
         error 1 "Failed to apply compression policy"
     fi
-    
+
     # Check if file deletion is enabled
     if [[ "${KOPIA_ENABLE_FILE_DELETION}" == "true" ]]; then
         echo "File deletion enabled - cleaning destination directory before restore"
@@ -2045,19 +2122,19 @@ function do_restore {
             echo "Destination directory cleaned (preserved lost+found if present)"
         fi
     fi
-    
+
     # Check if discovery mode is enabled
     if [[ "${KOPIA_DISCOVER_SNAPSHOTS}" == "true" ]]; then
         echo "Discovery mode enabled - will list available snapshots if restore fails"
     fi
-    
+
     # Select snapshot to restore
     local snapshot_id
     snapshot_id=$(select_snapshot_to_restore)
-    
+
     if [[ -z ${snapshot_id} ]]; then
         echo "No eligible snapshots found"
-        
+
         # If discovery mode is enabled and no snapshots found, list available snapshots
         if [[ "${KOPIA_DISCOVER_SNAPSHOTS}" == "true" ]]; then
             local search_path="${KOPIA_SOURCE_PATH_OVERRIDE:-/data}"
@@ -2067,29 +2144,29 @@ function do_restore {
             echo "No snapshots found for ${KOPIA_OVERRIDE_USERNAME:-$(whoami)}@${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}:${search_path}"
             discover_available_snapshots
         fi
-        
+
         echo "=== No data will be restored ==="
         return 0
     fi
-    
+
     echo "Selected snapshot with id: ${snapshot_id}"
-    
+
     # Restore the snapshot with proper error handling
     # Change to the target directory first to avoid path construction issues
     # when using --write-files-atomically (prevents //data.kopia-entry error)
     if ! cd "${DATA_DIR}"; then
         error 1 "Failed to change to data directory: ${DATA_DIR}"
     fi
-    
+
     # Build restore command with options
     declare -a RESTORE_CMD
-    RESTORE_CMD=("${KOPIA[@]}" snapshot restore "${snapshot_id}" . \
-        --write-files-atomically \
+    RESTORE_CMD=("${KOPIA[@]}" snapshot restore "${snapshot_id}" .
+        --write-files-atomically
         --ignore-permission-errors)
-    
+
     # Add additional arguments if specified
     add_additional_args RESTORE_CMD
-    
+
     # Execute the restore command
     log_info "Executing restore command..."
     log_debug "Restore command: ${RESTORE_CMD[*]}"
@@ -2205,7 +2282,7 @@ else
 fi
 
 OPERATION_END_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-OPERATION_DURATION=$(( SECONDS - START_TIME ))
+OPERATION_DURATION=$((SECONDS - START_TIME))
 
 log_timing "Total kopia operation completed in ${OPERATION_DURATION}s"
 log_info "Operation end time: ${OPERATION_END_TIMESTAMP}"

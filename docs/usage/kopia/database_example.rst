@@ -361,7 +361,7 @@ For future complex policy requirements (not yet available):
            "keepDaily": 30,
            "keepWeekly": 8,
            "keepMonthly": 24,
-           "keepAnnual": 5
+           "keepYearly": 5
          },
          "compression": {
            "compressor": "zstd",
