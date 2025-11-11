@@ -29,7 +29,7 @@ jobs:
     steps:
       # Must checkout source or gh can't figure out what to trigger
       - name: Checkout source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Trigger workflows
         env:
@@ -41,11 +41,8 @@ jobs:
           gh workflow run --ref "main" "operator.yml"
           gh workflow run --ref "main" "documentation.yml"
 
-          gh workflow run --ref "release-0.11" "operator.yml"
-          gh workflow run --ref "release-0.11" "documentation.yml"
+          gh workflow run --ref "release-0.13" "operator.yml"
+          gh workflow run --ref "release-0.13" "documentation.yml"
 
-          gh workflow run --ref "release-0.10" "operator.yml"
-          gh workflow run --ref "release-0.10" "documentation.yml"
-
-          gh workflow run --ref "release-0.9" "operator.yml"
-          gh workflow run --ref "release-0.9" "documentation.yml"
+          gh workflow run --ref "release-0.12" "operator.yml"
+          gh workflow run --ref "release-0.12" "documentation.yml"
