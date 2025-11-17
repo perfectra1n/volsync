@@ -293,8 +293,9 @@ The Kopia documentation has been organized into focused sections for easier navi
 
 :doc:`filesystem-destination`
    Comprehensive guide to using PersistentVolumeClaims as filesystem-based backup
-   destinations. Covers configuration, security, migration from remote storage,
-   and use cases for local and network-attached storage.
+   destinations with the ``moverVolumes`` pattern. Covers configuration, security,
+   migration from the deprecated ``repositoryPVC`` field, and use cases for local
+   and network-attached storage.
 
 :doc:`repository-organization`
    Comprehensive guide to Kopia's deduplication and repository organization strategies.
@@ -361,7 +362,7 @@ Quick reference for Kopia feature availability in VolSync:
 
 - Core backup and restore operations
 - All major cloud storage backends (S3, GCS, Azure, etc.)
-- Filesystem repository via PVC (ReplicationSource only)
+- Filesystem repository via PVC using moverVolumes (ReplicationSource only)
 - Retention policies (inline configuration)
 - Snapshot actions/hooks (beforeSnapshot, afterSnapshot)
 - Source path selection and overrides
@@ -388,7 +389,8 @@ Quick reference for Kopia feature availability in VolSync:
 
 **Important Notes:**
 
-- ``repositoryPVC`` is only available for ReplicationSource, not ReplicationDestination
+- ``moverVolumes`` for filesystem repositories is only available for ReplicationSource, not ReplicationDestination
+- The ``repositoryPVC`` field was deprecated and removed in v0.11.0 - use ``moverVolumes`` instead
 - Both ``AWS_*`` and ``KOPIA_*`` environment variables are supported for backends
 - Compression is set at repository creation and cannot be changed afterward
 

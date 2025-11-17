@@ -64,7 +64,7 @@ func TestMaintenanceManager(t *testing.T) {
 
 		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sourceSecret).Build()
 		logger := logr.Discard()
-		manager := NewMaintenanceManager(client, logger, "test-image:latest")
+		manager := NewMaintenanceManager(client, logger, "test-image:latest", nil)
 
 		// Create a test ReplicationSource
 		source := &volsyncv1alpha1.ReplicationSource{
@@ -184,7 +184,7 @@ func TestMaintenanceManager(t *testing.T) {
 	t.Run("MaintenanceDisabledWhenIntervalIsZero", func(t *testing.T) {
 		client := fake.NewClientBuilder().WithScheme(scheme).Build()
 		logger := logr.Discard()
-		manager := NewMaintenanceManager(client, logger, "test-image:latest")
+		manager := NewMaintenanceManager(client, logger, "test-image:latest", nil)
 
 		// Create a test ReplicationSource with maintenance disabled
 		// maintenanceInterval := int32(0) // Field removed
@@ -269,7 +269,7 @@ func TestMaintenanceManager(t *testing.T) {
 
 		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(orphanedCronJob, orphanedSecret).Build()
 		logger := logr.Discard()
-		manager := NewMaintenanceManager(client, logger, "test-image:latest")
+		manager := NewMaintenanceManager(client, logger, "test-image:latest", nil)
 
 		// Cleanup orphaned CronJobs (no sources exist)
 		err := manager.CleanupOrphanedMaintenanceCronJobs(context.Background(), "test-namespace")
@@ -375,7 +375,7 @@ func TestMaintenanceManager(t *testing.T) {
 
 		client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sourceSecret).Build()
 		logger := logr.Discard()
-		manager := NewMaintenanceManager(client, logger, "test-image:latest")
+		manager := NewMaintenanceManager(client, logger, "test-image:latest", nil)
 
 		// Create a test ReplicationSource
 		source := &volsyncv1alpha1.ReplicationSource{

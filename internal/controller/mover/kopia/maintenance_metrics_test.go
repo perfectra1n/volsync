@@ -51,7 +51,7 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 		client := fake.NewClientBuilder().Build()
 
 		// Create maintenance manager
-		manager = NewMaintenanceManager(client, logger, "quay.io/backube/volsync-kopia:latest")
+		manager = NewMaintenanceManager(client, logger, "quay.io/backube/volsync-kopia:latest", nil)
 
 		// Create a test ReplicationSource
 		// enabled := true // Field removed

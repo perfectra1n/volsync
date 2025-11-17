@@ -189,10 +189,25 @@ func (in *KopiaMaintenanceSpec) DeepCopyInto(out *KopiaMaintenanceSpec) {
 		*out = new(v1.ResourceRequirements)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ActiveDeadlineSeconds != nil {
+		in, out := &in.ActiveDeadlineSeconds, &out.ActiveDeadlineSeconds
+		*out = new(int64)
+		**out = **in
+	}
 	if in.ServiceAccountName != nil {
 		in, out := &in.ServiceAccountName, &out.ServiceAccountName
 		*out = new(string)
 		**out = **in
+	}
+	if in.PodSecurityContext != nil {
+		in, out := &in.PodSecurityContext, &out.PodSecurityContext
+		*out = new(v1.PodSecurityContext)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.ContainerSecurityContext != nil {
+		in, out := &in.ContainerSecurityContext, &out.ContainerSecurityContext
+		*out = new(v1.SecurityContext)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.MoverPodLabels != nil {
 		in, out := &in.MoverPodLabels, &out.MoverPodLabels
@@ -1290,11 +1305,6 @@ func (in *ReplicationSourceKopiaSpec) DeepCopyInto(out *ReplicationSourceKopiaSp
 	}
 	if in.SourcePathOverride != nil {
 		in, out := &in.SourcePathOverride, &out.SourcePathOverride
-		*out = new(string)
-		**out = **in
-	}
-	if in.RepositoryPVC != nil {
-		in, out := &in.RepositoryPVC, &out.RepositoryPVC
 		*out = new(string)
 		**out = **in
 	}

@@ -578,7 +578,7 @@ Determining Required User/Group IDs
 
 To identify the correct user and group IDs for your repository:
 
-**For filesystem-based repositories (repositoryPVC)**:
+**For filesystem-based repositories (moverVolumes)**:
 
 .. code-block:: bash
 

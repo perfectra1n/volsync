@@ -120,8 +120,8 @@ This section provides quick solutions to the most common Kopia issues:
      - Known issue: Use KOPIA_MANUAL_CONFIG in repository secret instead of compression field
    * - No snapshots found
      - Check requestedIdentity matches source; use availableIdentities to see what's in repository
-   * - repositoryPVC in ReplicationDestination
-     - Not supported - repositoryPVC only works with ReplicationSource
+   * - moverVolumes for repository in ReplicationDestination
+     - Not supported - moverVolumes for repositories only works with ReplicationSource
    * - External policy files not loading
      - Not implemented - use inline configuration (retain, actions) instead
    * - enableFileDeletion vs enable_file_deletion
@@ -285,7 +285,7 @@ Filesystem Repository Issues
 
 **Resolution**:
 
-1. Verify the PVC specified in ``repositoryPVC`` exists in the correct namespace:
+1. Verify the PVC specified in ``moverVolumes`` exists in the correct namespace:
 
    .. code-block:: bash
 
@@ -339,7 +339,7 @@ Filesystem Repository Issues
 
 **Filesystem URL Configuration**
 
-**Note**: When using ``repositoryPVC``, VolSync automatically sets ``KOPIA_REPOSITORY=filesystem:///kopia/repository``. You don't need to configure this manually in the secret.
+**Note**: When using ``moverVolumes`` for filesystem repositories, VolSync automatically detects the first PVC and sets ``KOPIA_REPOSITORY=filesystem:///mnt/<mountPath>`` where ``<mountPath>`` is from your moverVolumes configuration. You don't need to configure this manually in the secret.
 3. Check for directory traversal attempts (../)
 
 **Permission Denied**
@@ -1629,7 +1629,7 @@ Configure ``podSecurityContext`` in your KopiaMaintenance resource to match the 
 Security Context for Different Storage Types
 ---------------------------------------------
 
-**Filesystem Repositories (repositoryPVC)**:
+**Filesystem Repositories (moverVolumes)**:
 
 Must match the PVC ownership:
 

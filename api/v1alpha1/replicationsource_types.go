@@ -319,14 +319,6 @@ type ReplicationSourceKopiaSpec struct {
 	// +kubebuilder:validation:Pattern="^/.*"
 	//+optional
 	SourcePathOverride *string `json:"sourcePathOverride,omitempty"`
-	// RepositoryPVC defines a PVC to use as a filesystem-based backup repository.
-	// When specified, Kopia will write backups directly to this PVC instead of
-	// a remote repository. The PVC must exist in the same namespace as the
-	// ReplicationSource. The repository will be created at /kopia/repository
-	// within the mounted PVC for security and isolation.
-	// +kubebuilder:validation:MinLength=1
-	// +optional
-	RepositoryPVC *string `json:"repositoryPVC,omitempty"`
 	// AdditionalArgs allows specifying additional command-line arguments for Kopia.
 	// These arguments will be passed to Kopia snapshot commands during backup operations.
 	// This provides flexibility for advanced users to utilize Kopia features not directly

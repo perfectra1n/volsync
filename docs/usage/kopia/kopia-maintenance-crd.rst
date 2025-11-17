@@ -511,10 +511,11 @@ Debugging Commands
 Special Cases
 =============
 
-RepositoryPVC Not Supported
----------------------------
+Filesystem Repositories with moverVolumes
+------------------------------------------
 
-ReplicationSources using ``repositoryPVC`` cannot use KopiaMaintenance and must handle maintenance separately.
+ReplicationSources using ``moverVolumes`` for filesystem repositories work with KopiaMaintenance. The repository
+secret should be configured with the appropriate filesystem URL (e.g., ``filesystem:///mnt/<mountPath>``).
 
 Multiple Repositories Same Namespace
 ------------------------------------

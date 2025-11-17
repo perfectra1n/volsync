@@ -336,6 +336,17 @@ func UpdatePodTemplateSpecWithMoverVolumes(ctx context.Context, c client.Client,
 func ValidateMoverVolumes(ctx context.Context, c client.Client, logger logr.Logger,
 	namespace string, moverVolumes []volsyncv1alpha1.MoverVolume) error {
 	for _, mv := range moverVolumes {
+		// Validate mount path is safe
+		if mv.MountPath == "" {
+			return fmt.Errorf("moverVolume mount path cannot be empty")
+		}
+		if strings.Contains(mv.MountPath, "/") {
+			return fmt.Errorf("moverVolume mount path cannot contain path separators: %s", mv.MountPath)
+		}
+		if strings.Contains(mv.MountPath, "..") {
+			return fmt.Errorf("moverVolume mount path cannot contain path traversal: %s", mv.MountPath)
+		}
+
 		if mv.VolumeSource.PersistentVolumeClaim != nil {
 			pvc := &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
