@@ -312,7 +312,7 @@ func TestMaintenanceManager(t *testing.T) {
 
 		config2 := &RepositoryConfig{
 			Repository: "repo1",
-			Namespace:  "ns2", // Different namespace
+			Namespace:  "ns2",       // Different namespace
 			Schedule:   "0 3 * * *", // Different schedule
 		}
 

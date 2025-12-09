@@ -55,10 +55,10 @@ const (
 	dataVolumeName          = "data"
 	kopiaCache              = "cache"
 	restoreVolumeName       = "restore"
-	kopiaCAMountPath  = "/customCA"
-	kopiaCAFilename   = "ca.crt"
-	credentialDir     = "/credentials"
-	gcsCredentialFile = "gcs.json"
+	kopiaCAMountPath        = "/customCA"
+	kopiaCAFilename         = "ca.crt"
+	credentialDir           = "/credentials"
+	gcsCredentialFile       = "gcs.json"
 	kopiaPolicyMountPath    = "/kopia-config"
 	defaultGlobalPolicyFile = "global-policy.json"
 	defaultRepoConfigFile   = "repository.config"
@@ -132,13 +132,13 @@ type Mover struct {
 	username string
 	hostname string
 	// Source-only fields
-	sourcePathOverride  *string
-	retainPolicy        *volsyncv1alpha1.KopiaRetainPolicy
-	compression         string
-	parallelism    *int32
-	actions        *volsyncv1alpha1.KopiaActions
-	sourceStatus   *volsyncv1alpha1.ReplicationSourceKopiaStatus
-	additionalArgs []string
+	sourcePathOverride *string
+	retainPolicy       *volsyncv1alpha1.KopiaRetainPolicy
+	compression        string
+	parallelism        *int32
+	actions            *volsyncv1alpha1.KopiaActions
+	sourceStatus       *volsyncv1alpha1.ReplicationSourceKopiaStatus
+	additionalArgs     []string
 	// Destination-only fields
 	restoreAsOf                 *string
 	shallow                     *int32
@@ -546,6 +546,12 @@ func (m *Mover) configureJobSpec(ctx context.Context, job *batchv1.Job, cachePVC
 
 	// Update the job securityContext, podLabels and resourceRequirements from moverConfig (if specified)
 	utils.UpdatePodTemplateSpecFromMoverConfig(&job.Spec.Template, m.moverConfig, corev1.ResourceRequirements{})
+
+	// Mount any additional volumes specified in moverConfig.MoverVolumes
+	if err := utils.UpdatePodTemplateSpecWithMoverVolumes(ctx, m.client, logger, m.owner.GetNamespace(),
+		&job.Spec.Template, m.moverConfig.MoverVolumes); err != nil {
+		return err
+	}
 
 	m.configureSecurityContext(podSpec)
 	return nil
@@ -1435,7 +1441,6 @@ func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 	// On the source, just signal completion
 	return mover.Complete(), nil
 }
-
 
 // recordOperationSuccess records metrics for successful operations
 func (m *Mover) recordOperationSuccess(operation string, duration time.Duration) {
