@@ -193,6 +193,8 @@ func getNamespaceAppendingCases() []usernameWithNamespaceTestCase {
 }
 
 // getUsernameEdgeCases tests edge cases
+// Note: Username generation uses object name only (simplified approach).
+// Multi-tenancy is achieved through hostname (namespace) + username (object name) combination.
 func getUsernameEdgeCases() []usernameWithNamespaceTestCase {
 	return []usernameWithNamespaceTestCase{
 		{
@@ -201,31 +203,31 @@ func getUsernameEdgeCases() []usernameWithNamespaceTestCase {
 			objectName:  "app-backup",
 			namespace:   "@#$%^&*()",
 			expected:    "app-backup",
-			description: "Should not append namespace that becomes empty after sanitization",
+			description: "Should use object name only (namespace ignored)",
 		},
 		{
 			name:        "object name with namespace both need sanitization",
 			username:    nil,
 			objectName:  "app@backup",
 			namespace:   "prod@env",
-			expected:    "appbackup-prodenv",
-			description: "Should sanitize both object name and namespace",
+			expected:    "appbackup",
+			description: "Should sanitize object name only (namespace ignored)",
 		},
 		{
 			name:        "edge case at exactly 50 chars with separator",
 			username:    nil,
 			objectName:  strings.Repeat("a", 23),
 			namespace:   strings.Repeat("b", 26),
-			expected:    strings.Repeat("a", 23) + "-" + strings.Repeat("b", 26),
-			description: "Should allow exactly 50 chars including separator",
+			expected:    strings.Repeat("a", 23),
+			description: "Should use object name only (namespace ignored)",
 		},
 		{
 			name:        "edge case just under limit",
 			username:    nil,
 			objectName:  strings.Repeat("a", 22),
 			namespace:   strings.Repeat("b", 26),
-			expected:    strings.Repeat("a", 22) + "-" + strings.Repeat("b", 26),
-			description: "Should allow just under 50 chars",
+			expected:    strings.Repeat("a", 22),
+			description: "Should use object name only (namespace ignored)",
 		},
 		{
 			name:        "edge case exceeding limit",
@@ -233,7 +235,7 @@ func getUsernameEdgeCases() []usernameWithNamespaceTestCase {
 			objectName:  strings.Repeat("a", 24),
 			namespace:   strings.Repeat("b", 26),
 			expected:    strings.Repeat("a", 24),
-			description: "Should not append namespace when combined exceeds 50 chars",
+			description: "Should use object name only (namespace ignored)",
 		},
 	}
 }
