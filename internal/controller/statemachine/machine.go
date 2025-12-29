@@ -215,6 +215,9 @@ func transitionToCleaningUp(r ReplicationMachine, l logr.Logger) error {
 	// duration calculation, it serves as the indicator of which state we're in
 	r.SetLastSyncStartTime(nil)
 
+	// Set condition to indicate cleanup is in progress (not synchronizing)
+	setConditionCleanup(r, l)
+
 	return nil
 }
 

@@ -63,11 +63,12 @@ const (
 )
 
 const (
-	ConditionSynchronizing    string = "Synchronizing"
-	SynchronizingReasonSync   string = "SyncInProgress"
-	SynchronizingReasonSched  string = "WaitingForSchedule"
-	SynchronizingReasonManual string = "WaitingForManual"
-	SynchronizingReasonError  string = "Error"
+	ConditionSynchronizing     string = "Synchronizing"
+	SynchronizingReasonSync    string = "SyncInProgress"
+	SynchronizingReasonSched   string = "WaitingForSchedule"
+	SynchronizingReasonManual  string = "WaitingForManual"
+	SynchronizingReasonError   string = "Error"
+	SynchronizingReasonCleanup string = "CleanupInProgress"
 )
 
 const (

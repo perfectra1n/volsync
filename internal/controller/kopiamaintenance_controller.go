@@ -1296,8 +1296,15 @@ func (r *KopiaMaintenanceReconciler) cleanupCronJob(ctx context.Context, mainten
 
 // updateStatusWithError updates the KopiaMaintenance status including error conditions
 func (r *KopiaMaintenanceReconciler) updateStatusWithError(ctx context.Context, maintenance *volsyncv1alpha1.KopiaMaintenance, activeCronJob string, reconcileErr error) error {
-	// Get the latest version of the resource
-	original := maintenance.DeepCopy()
+	// Get the latest version of the resource from the cluster for accurate patch base
+	original := &volsyncv1alpha1.KopiaMaintenance{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      maintenance.Name,
+		Namespace: maintenance.Namespace,
+	}, original); err != nil {
+		// If we can't get the original, fall back to using the passed-in object
+		original = maintenance.DeepCopy()
+	}
 
 	// Ensure status is initialized
 	if maintenance.Status == nil {
