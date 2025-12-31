@@ -20,143 +20,141 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package kopia
 
 import (
-	"testing"
-
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-func TestCalculateCacheLimits(t *testing.T) {
-	tests := []struct {
-		name             string
-		cacheCapacity    *resource.Quantity
-		expectedMetadata int32
-		expectedContent  int32
-	}{
-		{
-			name:             "nil capacity returns zeros",
-			cacheCapacity:    nil,
-			expectedMetadata: 0,
-			expectedContent:  0,
-		},
-		{
-			name:             "1Gi capacity calculates 70% and 20%",
-			cacheCapacity:    resource.NewQuantity(1024*1024*1024, resource.BinarySI),
-			expectedMetadata: 716, // 1024 * 0.70
-			expectedContent:  204, // 1024 * 0.20
-		},
-		{
-			name:             "5Gi capacity calculates 70% and 20%",
-			cacheCapacity:    resource.NewQuantity(5*1024*1024*1024, resource.BinarySI),
-			expectedMetadata: 3584, // 5120 * 0.70
-			expectedContent:  1024, // 5120 * 0.20
-		},
-		{
-			name:             "small capacity (100Mi) calculates correctly",
-			cacheCapacity:    resource.NewQuantity(100*1024*1024, resource.BinarySI),
-			expectedMetadata: 70, // 100 * 0.70
-			expectedContent:  20, // 100 * 0.20
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := &Mover{cacheCapacity: tt.cacheCapacity}
-			metaMB, contentMB := m.calculateCacheLimits()
-
-			if metaMB != tt.expectedMetadata {
-				t.Errorf("metadataMB = %d, want %d", metaMB, tt.expectedMetadata)
-			}
-			if contentMB != tt.expectedContent {
-				t.Errorf("contentMB = %d, want %d", contentMB, tt.expectedContent)
-			}
+var _ = Describe("Kopia Cache Limits", func() {
+	Describe("calculateCacheLimits", func() {
+		Context("when cacheCapacity is nil", func() {
+			It("should return zeros", func() {
+				m := &Mover{cacheCapacity: nil}
+				metaMB, contentMB := m.calculateCacheLimits()
+				Expect(metaMB).To(Equal(int32(0)))
+				Expect(contentMB).To(Equal(int32(0)))
+			})
 		})
-	}
-}
 
-//nolint:funlen
-func TestAddCacheLimitEnvVars(t *testing.T) {
-	int32Ptr := func(i int32) *int32 { return &i }
+		Context("when cacheCapacity is 1Gi", func() {
+			It("should calculate 70% for metadata and 20% for content", func() {
+				capacity := resource.NewQuantity(1024*1024*1024, resource.BinarySI)
+				m := &Mover{cacheCapacity: capacity}
+				metaMB, contentMB := m.calculateCacheLimits()
+				Expect(metaMB).To(Equal(int32(716)))    // 1024 * 0.70
+				Expect(contentMB).To(Equal(int32(204))) // 1024 * 0.20
+			})
+		})
 
-	tests := []struct {
-		name                     string
-		metadataCacheSizeLimitMB *int32
-		contentCacheSizeLimitMB  *int32
-		cacheCapacity            *resource.Quantity
-		expectedEnvVars          map[string]string // env var name -> value
-	}{
-		{
-			name:                     "explicit limits are used",
-			metadataCacheSizeLimitMB: int32Ptr(2000),
-			contentCacheSizeLimitMB:  int32Ptr(500),
-			cacheCapacity:            nil,
-			expectedEnvVars: map[string]string{
-				"KOPIA_METADATA_CACHE_SIZE_LIMIT_MB": "2000",
-				"KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB":  "500",
-			},
-		},
-		{
-			name:                     "nil limits with capacity triggers auto-calc",
-			metadataCacheSizeLimitMB: nil,
-			contentCacheSizeLimitMB:  nil,
-			cacheCapacity:            resource.NewQuantity(1024*1024*1024, resource.BinarySI),
-			expectedEnvVars: map[string]string{
-				"KOPIA_METADATA_CACHE_SIZE_LIMIT_MB": "716",
-				"KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB":  "204",
-			},
-		},
-		{
-			name:                     "zero limits mean unlimited - no env vars",
-			metadataCacheSizeLimitMB: int32Ptr(0),
-			contentCacheSizeLimitMB:  int32Ptr(0),
-			cacheCapacity:            resource.NewQuantity(1024*1024*1024, resource.BinarySI),
-			expectedEnvVars:          map[string]string{},
-		},
-		{
-			name:                     "nil limits without capacity - no env vars",
-			metadataCacheSizeLimitMB: nil,
-			contentCacheSizeLimitMB:  nil,
-			cacheCapacity:            nil,
-			expectedEnvVars:          map[string]string{},
-		},
-		{
-			name:                     "mixed explicit and auto-calc",
-			metadataCacheSizeLimitMB: int32Ptr(1000),
-			contentCacheSizeLimitMB:  nil,
-			cacheCapacity:            resource.NewQuantity(1024*1024*1024, resource.BinarySI),
-			expectedEnvVars: map[string]string{
-				"KOPIA_METADATA_CACHE_SIZE_LIMIT_MB": "1000",
-				"KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB":  "204",
-			},
-		},
-	}
+		Context("when cacheCapacity is 5Gi", func() {
+			It("should calculate 70% for metadata and 20% for content", func() {
+				capacity := resource.NewQuantity(5*1024*1024*1024, resource.BinarySI)
+				m := &Mover{cacheCapacity: capacity}
+				metaMB, contentMB := m.calculateCacheLimits()
+				Expect(metaMB).To(Equal(int32(3584)))   // 5120 * 0.70
+				Expect(contentMB).To(Equal(int32(1024))) // 5120 * 0.20
+			})
+		})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := &Mover{
-				metadataCacheSizeLimitMB: tt.metadataCacheSizeLimitMB,
-				contentCacheSizeLimitMB:  tt.contentCacheSizeLimitMB,
-				cacheCapacity:            tt.cacheCapacity,
-			}
+		Context("when cacheCapacity is small (100Mi)", func() {
+			It("should calculate correctly", func() {
+				capacity := resource.NewQuantity(100*1024*1024, resource.BinarySI)
+				m := &Mover{cacheCapacity: capacity}
+				metaMB, contentMB := m.calculateCacheLimits()
+				Expect(metaMB).To(Equal(int32(70)))   // 100 * 0.70
+				Expect(contentMB).To(Equal(int32(20))) // 100 * 0.20
+			})
+		})
+	})
 
-			envVars := m.addCacheLimitEnvVars(nil)
+	Describe("addCacheLimitEnvVars", func() {
+		int32Ptr := func(i int32) *int32 { return &i }
 
-			// Convert to map for easier comparison
-			envMap := make(map[string]string)
-			for _, ev := range envVars {
-				envMap[ev.Name] = ev.Value
-			}
-
-			if len(envMap) != len(tt.expectedEnvVars) {
-				t.Errorf("got %d env vars, want %d", len(envMap), len(tt.expectedEnvVars))
-			}
-
-			for name, expectedValue := range tt.expectedEnvVars {
-				if gotValue, ok := envMap[name]; !ok {
-					t.Errorf("missing env var %s", name)
-				} else if gotValue != expectedValue {
-					t.Errorf("env var %s = %s, want %s", name, gotValue, expectedValue)
+		Context("when explicit limits are provided", func() {
+			It("should use the explicit limits", func() {
+				m := &Mover{
+					metadataCacheSizeLimitMB: int32Ptr(2000),
+					contentCacheSizeLimitMB:  int32Ptr(500),
+					cacheCapacity:            nil,
 				}
-			}
+				envVars := m.addCacheLimitEnvVars(nil)
+
+				envMap := make(map[string]string)
+				for _, ev := range envVars {
+					envMap[ev.Name] = ev.Value
+				}
+
+				Expect(envMap).To(HaveLen(2))
+				Expect(envMap["KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"]).To(Equal("2000"))
+				Expect(envMap["KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"]).To(Equal("500"))
+			})
 		})
-	}
-}
+
+		Context("when limits are nil but capacity is set", func() {
+			It("should auto-calculate limits from capacity", func() {
+				capacity := resource.NewQuantity(1024*1024*1024, resource.BinarySI)
+				m := &Mover{
+					metadataCacheSizeLimitMB: nil,
+					contentCacheSizeLimitMB:  nil,
+					cacheCapacity:            capacity,
+				}
+				envVars := m.addCacheLimitEnvVars(nil)
+
+				envMap := make(map[string]string)
+				for _, ev := range envVars {
+					envMap[ev.Name] = ev.Value
+				}
+
+				Expect(envMap).To(HaveLen(2))
+				Expect(envMap["KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"]).To(Equal("716"))
+				Expect(envMap["KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"]).To(Equal("204"))
+			})
+		})
+
+		Context("when limits are explicitly set to zero", func() {
+			It("should not add env vars (unlimited)", func() {
+				capacity := resource.NewQuantity(1024*1024*1024, resource.BinarySI)
+				m := &Mover{
+					metadataCacheSizeLimitMB: int32Ptr(0),
+					contentCacheSizeLimitMB:  int32Ptr(0),
+					cacheCapacity:            capacity,
+				}
+				envVars := m.addCacheLimitEnvVars(nil)
+				Expect(envVars).To(BeEmpty())
+			})
+		})
+
+		Context("when limits are nil and capacity is nil", func() {
+			It("should not add env vars", func() {
+				m := &Mover{
+					metadataCacheSizeLimitMB: nil,
+					contentCacheSizeLimitMB:  nil,
+					cacheCapacity:            nil,
+				}
+				envVars := m.addCacheLimitEnvVars(nil)
+				Expect(envVars).To(BeEmpty())
+			})
+		})
+
+		Context("when mixing explicit and auto-calculated limits", func() {
+			It("should use explicit for one and auto-calculate for the other", func() {
+				capacity := resource.NewQuantity(1024*1024*1024, resource.BinarySI)
+				m := &Mover{
+					metadataCacheSizeLimitMB: int32Ptr(1000),
+					contentCacheSizeLimitMB:  nil,
+					cacheCapacity:            capacity,
+				}
+				envVars := m.addCacheLimitEnvVars(nil)
+
+				envMap := make(map[string]string)
+				for _, ev := range envVars {
+					envMap[ev.Name] = ev.Value
+				}
+
+				Expect(envMap).To(HaveLen(2))
+				Expect(envMap["KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"]).To(Equal("1000"))
+				Expect(envMap["KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"]).To(Equal("204"))
+			})
+		})
+	})
+})
