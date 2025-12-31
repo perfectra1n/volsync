@@ -297,6 +297,16 @@ type ReplicationSourceKopiaSpec struct {
 	// CacheAccessModes can be used to set the accessModes of kopia metadata cache volume
 	//+optional
 	CacheAccessModes []corev1.PersistentVolumeAccessMode `json:"cacheAccessModes,omitempty"`
+	// MetadataCacheSizeLimitMB is the hard limit for Kopia's metadata cache in MB.
+	// If not specified, auto-calculated as 70% of CacheCapacity.
+	// Set to 0 for unlimited (Kopia default behavior).
+	//+optional
+	MetadataCacheSizeLimitMB *int32 `json:"metadataCacheSizeLimitMB,omitempty"`
+	// ContentCacheSizeLimitMB is the hard limit for Kopia's content cache in MB.
+	// If not specified, auto-calculated as 20% of CacheCapacity.
+	// Set to 0 for unlimited (Kopia default behavior).
+	//+optional
+	ContentCacheSizeLimitMB *int32 `json:"contentCacheSizeLimitMB,omitempty"`
 	// Actions defines pre/post snapshot actions
 	//+optional
 	Actions *KopiaActions `json:"actions,omitempty"`

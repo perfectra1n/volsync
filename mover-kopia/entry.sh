@@ -35,6 +35,14 @@
 #   Useful for recovering from cache corruption errors (mmap errors, pack index errors)
 #   Safe to use - only removes cache data that Kopia can rebuild automatically
 #
+# KOPIA_METADATA_CACHE_SIZE_LIMIT_MB - Maximum size of metadata cache in MB (default: auto)
+#   Controls the hard limit for Kopia's metadata cache
+#   If not set, auto-calculated as 70% of cache capacity
+#
+# KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB - Maximum size of content cache in MB (default: auto)
+#   Controls the hard limit for Kopia's content cache
+#   If not set, auto-calculated as 20% of cache capacity
+#
 # These Kubernetes-optimized defaults minimize cache PVC disk usage since most
 # users rely on external logging systems (Loki, ElasticSearch, Fluentd, etc.)
 # for log aggregation. The local files are primarily for immediate debugging.
@@ -1128,7 +1136,27 @@ function ensure_connected {
     local cache_start_time=$(date +%s)
     declare -a CACHE_CMD
     CACHE_CMD=("${KOPIA[@]}" cache set --cache-directory="${KOPIA_CACHE_DIR}")
-    
+
+    # Apply metadata cache size limit if specified
+    if [[ -n "${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}" ]]; then
+        if [[ "${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}" =~ ^[0-9]+$ ]]; then
+            log_info "Setting metadata cache size limit: ${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB} MB"
+            CACHE_CMD+=(--metadata-cache-size-limit-mb="${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}")
+        else
+            log_warn "WARNING: Invalid metadata cache size limit '${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}', must be numeric"
+        fi
+    fi
+
+    # Apply content cache size limit if specified
+    if [[ -n "${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}" ]]; then
+        if [[ "${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}" =~ ^[0-9]+$ ]]; then
+            log_info "Setting content cache size limit: ${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB} MB"
+            CACHE_CMD+=(--content-cache-size-limit-mb="${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}")
+        else
+            log_warn "WARNING: Invalid content cache size limit '${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}', must be numeric"
+        fi
+    fi
+
     # Apply manual cache configuration if specified
     if [[ -n "${KOPIA_MANUAL_CACHING_CONFIG}" && "${KOPIA_MANUAL_CACHING_CONFIG}" != "null" ]]; then
         echo "Applying manual cache configuration..."

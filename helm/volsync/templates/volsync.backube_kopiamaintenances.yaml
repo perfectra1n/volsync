@@ -1172,6 +1172,13 @@ spec:
                           type: string
                       type: object
                   type: object
+                contentCacheSizeLimitMB:
+                  description: |-
+                    ContentCacheSizeLimitMB is the hard limit for Kopia's content cache in MB.
+                    If not specified, auto-calculated as 20% of CacheCapacity.
+                    Set to 0 for unlimited (Kopia default behavior).
+                  format: int32
+                  type: integer
                 enabled:
                   default: true
                   description: |-
@@ -1185,6 +1192,13 @@ spec:
                     should be kept. Defaults to 1.
                   format: int32
                   minimum: 0
+                  type: integer
+                metadataCacheSizeLimitMB:
+                  description: |-
+                    MetadataCacheSizeLimitMB is the hard limit for Kopia's metadata cache in MB.
+                    If not specified, auto-calculated as 70% of CacheCapacity.
+                    Set to 0 for unlimited (Kopia default behavior).
+                  format: int32
                   type: integer
                 moverPodLabels:
                   additionalProperties:

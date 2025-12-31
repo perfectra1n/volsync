@@ -142,6 +142,13 @@ spec:
                         owning ReplicationDestination is removed, even if this setting is false.
                         The default is false.
                       type: boolean
+                    contentCacheSizeLimitMB:
+                      description: |-
+                        ContentCacheSizeLimitMB is the hard limit for Kopia's content cache in MB.
+                        If not specified, auto-calculated as 20% of CacheCapacity.
+                        Set to 0 for unlimited (Kopia default behavior).
+                      format: int32
+                      type: integer
                     copyMethod:
                       description: |-
                         copyMethod describes how a point-in-time (PiT) image of the destination
@@ -189,6 +196,13 @@ spec:
                         Optional: If not specified, defaults to the namespace name.
                       pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                       type: string
+                    metadataCacheSizeLimitMB:
+                      description: |-
+                        MetadataCacheSizeLimitMB is the hard limit for Kopia's metadata cache in MB.
+                        If not specified, auto-calculated as 70% of CacheCapacity.
+                        Set to 0 for unlimited (Kopia default behavior).
+                      format: int32
+                      type: integer
                     moverAffinity:
                       description: MoverAffinity allows specifying the PodAffinity that will be used by the data mover
                       properties:

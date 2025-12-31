@@ -250,6 +250,16 @@ func (in *KopiaMaintenanceSpec) DeepCopyInto(out *KopiaMaintenanceSpec) {
 		*out = make([]v1.PersistentVolumeAccessMode, len(*in))
 		copy(*out, *in)
 	}
+	if in.MetadataCacheSizeLimitMB != nil {
+		in, out := &in.MetadataCacheSizeLimitMB, &out.MetadataCacheSizeLimitMB
+		*out = new(int32)
+		**out = **in
+	}
+	if in.ContentCacheSizeLimitMB != nil {
+		in, out := &in.ContentCacheSizeLimitMB, &out.ContentCacheSizeLimitMB
+		*out = new(int32)
+		**out = **in
+	}
 	if in.CachePVC != nil {
 		in, out := &in.CachePVC, &out.CachePVC
 		*out = new(string)
@@ -618,6 +628,16 @@ func (in *ReplicationDestinationKopiaSpec) DeepCopyInto(out *ReplicationDestinat
 		in, out := &in.CacheAccessModes, &out.CacheAccessModes
 		*out = make([]v1.PersistentVolumeAccessMode, len(*in))
 		copy(*out, *in)
+	}
+	if in.MetadataCacheSizeLimitMB != nil {
+		in, out := &in.MetadataCacheSizeLimitMB, &out.MetadataCacheSizeLimitMB
+		*out = new(int32)
+		**out = **in
+	}
+	if in.ContentCacheSizeLimitMB != nil {
+		in, out := &in.ContentCacheSizeLimitMB, &out.ContentCacheSizeLimitMB
+		*out = new(int32)
+		**out = **in
 	}
 	if in.RestoreAsOf != nil {
 		in, out := &in.RestoreAsOf, &out.RestoreAsOf
@@ -1282,6 +1302,16 @@ func (in *ReplicationSourceKopiaSpec) DeepCopyInto(out *ReplicationSourceKopiaSp
 		in, out := &in.CacheAccessModes, &out.CacheAccessModes
 		*out = make([]v1.PersistentVolumeAccessMode, len(*in))
 		copy(*out, *in)
+	}
+	if in.MetadataCacheSizeLimitMB != nil {
+		in, out := &in.MetadataCacheSizeLimitMB, &out.MetadataCacheSizeLimitMB
+		*out = new(int32)
+		**out = **in
+	}
+	if in.ContentCacheSizeLimitMB != nil {
+		in, out := &in.ContentCacheSizeLimitMB, &out.ContentCacheSizeLimitMB
+		*out = new(int32)
+		**out = **in
 	}
 	if in.Actions != nil {
 		in, out := &in.Actions, &out.Actions

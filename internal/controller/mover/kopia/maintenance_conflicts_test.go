@@ -46,10 +46,10 @@ import (
 
 var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 	var (
-		ctx      context.Context
+		ctx       context.Context
 		k8sClient client.Client
-		manager  *MaintenanceManager
-		logger   = zap.New(zap.UseDevMode(true))
+		manager   *MaintenanceManager
+		logger    = zap.New(zap.UseDevMode(true))
 	)
 
 	BeforeEach(func() {
@@ -77,8 +77,8 @@ var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 
 	Describe("Schedule Conflict Resolution - First Wins Strategy", func() {
 		var (
-			repoSecret      *corev1.Secret
-			repoSecretName  = "shared-kopia-repo"
+			repoSecret     *corev1.Secret
+			repoSecretName = "shared-kopia-repo"
 		)
 
 		BeforeEach(func() {
@@ -89,7 +89,7 @@ var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 					Namespace: "namespace1",
 				},
 				Data: map[string][]byte{
-					"KOPIA_PASSWORD": []byte("test-password"),
+					"KOPIA_PASSWORD":   []byte("test-password"),
 					"KOPIA_REPOSITORY": []byte("s3://bucket/repo"),
 				},
 			}
@@ -102,7 +102,7 @@ var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 					Namespace: "namespace2",
 				},
 				Data: map[string][]byte{
-					"KOPIA_PASSWORD": []byte("test-password"),
+					"KOPIA_PASSWORD":   []byte("test-password"),
 					"KOPIA_REPOSITORY": []byte("s3://bucket/repo"),
 				},
 			}
@@ -115,7 +115,7 @@ var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 					Namespace: "namespace3",
 				},
 				Data: map[string][]byte{
-					"KOPIA_PASSWORD": []byte("test-password"),
+					"KOPIA_PASSWORD":   []byte("test-password"),
 					"KOPIA_REPOSITORY": []byte("s3://bucket/repo"),
 				},
 			}
@@ -370,7 +370,7 @@ var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 
 			// The annotation should contain info about the last conflict
 			conflictMsg := cronJob.Annotations[maintenanceScheduleConflictAnnotation]
-			Expect(conflictMsg).To(ContainSubstring("0 3 * * *")) // Last attempted schedule
+			Expect(conflictMsg).To(ContainSubstring("0 3 * * *"))  // Last attempted schedule
 			Expect(conflictMsg).To(ContainSubstring("namespace3")) // Last conflicting namespace
 		})
 
@@ -487,10 +487,10 @@ var _ = Describe("Maintenance Schedule Conflict Resolution", func() {
 
 var _ = Describe("Maintenance Conflict Resolution Edge Cases", func() {
 	var (
-		ctx      context.Context
+		ctx       context.Context
 		k8sClient client.Client
-		manager  *MaintenanceManager
-		logger   = zap.New(zap.UseDevMode(true))
+		manager   *MaintenanceManager
+		logger    = zap.New(zap.UseDevMode(true))
 	)
 
 	BeforeEach(func() {

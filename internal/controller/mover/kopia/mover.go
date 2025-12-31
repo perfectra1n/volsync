@@ -107,27 +107,29 @@ func (p *PolicyConfigConfigMap) GetVolumeSource(_ string) corev1.VolumeSource {
 
 // Mover is the reconciliation logic for the Kopia-based data mover.
 type Mover struct {
-	client                client.Client
-	logger                logr.Logger
-	eventRecorder         events.EventRecorder
-	owner                 client.Object
-	vh                    *volumehandler.VolumeHandler
-	saHandler             utils.SAHandler
-	containerImage        string
-	cacheAccessModes      []corev1.PersistentVolumeAccessMode
-	cacheCapacity         *resource.Quantity
-	cacheStorageClassName *string
-	repositoryName        string
-	isSource              bool
-	paused                bool
-	mainPVCName           *string
-	customCASpec          volsyncv1alpha1.CustomCASpec
-	policyConfig          *volsyncv1alpha1.KopiaPolicySpec
-	privileged            bool
-	latestMoverStatus     *volsyncv1alpha1.MoverStatus
-	moverConfig           volsyncv1alpha1.MoverConfig
-	metrics               kopiaMetrics
-	builder               *Builder
+	client                   client.Client
+	logger                   logr.Logger
+	eventRecorder            events.EventRecorder
+	owner                    client.Object
+	vh                       *volumehandler.VolumeHandler
+	saHandler                utils.SAHandler
+	containerImage           string
+	cacheAccessModes         []corev1.PersistentVolumeAccessMode
+	cacheCapacity            *resource.Quantity
+	cacheStorageClassName    *string
+	metadataCacheSizeLimitMB *int32
+	contentCacheSizeLimitMB  *int32
+	repositoryName           string
+	isSource                 bool
+	paused                   bool
+	mainPVCName              *string
+	customCASpec             volsyncv1alpha1.CustomCASpec
+	policyConfig             *volsyncv1alpha1.KopiaPolicySpec
+	privileged               bool
+	latestMoverStatus        *volsyncv1alpha1.MoverStatus
+	moverConfig              volsyncv1alpha1.MoverConfig
+	metrics                  kopiaMetrics
+	builder                  *Builder
 	// User identity for multi-tenancy
 	username string
 	hostname string
@@ -355,6 +357,22 @@ func (m *Mover) ensureCache(ctx context.Context,
 	cacheName := mover.VolSyncPrefix + dir + "-" + m.owner.GetName() + "-cache"
 	m.logger.Info("allocating cache volume", "PVC", cacheName, "isTemporary", isTemporary)
 	return cacheVh.EnsureNewPVC(ctx, m.logger, cacheName, isTemporary)
+}
+
+// calculateCacheLimits returns auto-calculated cache limits based on CacheCapacity.
+// Returns (0, 0) if no CacheCapacity is set (no auto-calculation).
+// Allocates 70% for metadata cache, 20% for content cache, leaving 10% for other files.
+func (m *Mover) calculateCacheLimits() (metadataMB, contentMB int32) {
+	if m.cacheCapacity == nil {
+		return 0, 0
+	}
+
+	capacityBytes := m.cacheCapacity.Value()
+	capacityMB := capacityBytes / (1024 * 1024)
+
+	metadataMB = int32(float64(capacityMB) * 0.70)
+	contentMB = int32(float64(capacityMB) * 0.20)
+	return metadataMB, contentMB
 }
 
 func (m *Mover) validateRepository(ctx context.Context) (*corev1.Secret, error) {
@@ -825,6 +843,9 @@ func (m *Mover) addSourceEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 	// Add additional args if specified
 	envVars = m.addAdditionalArgsEnvVar(envVars)
 
+	// Add cache limit env vars
+	envVars = m.addCacheLimitEnvVars(envVars)
+
 	return envVars
 }
 
@@ -850,6 +871,9 @@ func (m *Mover) addDestinationEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 
 	// Add additional args if specified
 	envVars = m.addAdditionalArgsEnvVar(envVars)
+
+	// Add cache limit env vars
+	envVars = m.addCacheLimitEnvVars(envVars)
 
 	return envVars
 }
@@ -916,6 +940,40 @@ func (m *Mover) addAdditionalArgsEnvVar(envVars []corev1.EnvVar) []corev1.EnvVar
 		Name:  envKopiaAdditionalArgs,
 		Value: argsString,
 	})
+
+	return envVars
+}
+
+// addCacheLimitEnvVars adds cache size limit environment variables.
+// Called from both addSourceEnvVars and addDestinationEnvVars since
+// both source and destination jobs connect to the repository and use cache.
+func (m *Mover) addCacheLimitEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
+	metadataLimit := m.metadataCacheSizeLimitMB
+	contentLimit := m.contentCacheSizeLimitMB
+
+	// Auto-calculate if not explicitly set (nil means auto, 0 means unlimited)
+	if metadataLimit == nil || contentLimit == nil {
+		autoMeta, autoContent := m.calculateCacheLimits()
+		if metadataLimit == nil && autoMeta > 0 {
+			metadataLimit = &autoMeta
+		}
+		if contentLimit == nil && autoContent > 0 {
+			contentLimit = &autoContent
+		}
+	}
+
+	if metadataLimit != nil && *metadataLimit > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_METADATA_CACHE_SIZE_LIMIT_MB",
+			Value: strconv.Itoa(int(*metadataLimit)),
+		})
+	}
+	if contentLimit != nil && *contentLimit > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB",
+			Value: strconv.Itoa(int(*contentLimit)),
+		})
+	}
 
 	return envVars
 }

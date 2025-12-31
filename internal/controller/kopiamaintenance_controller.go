@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -381,6 +382,57 @@ func containerSecurityContextEqual(a, b *corev1.SecurityContext) bool {
 	}
 
 	return true
+}
+
+// calculateMaintenanceCacheLimits returns auto-calculated cache limits based on CacheCapacity.
+// Returns (0, 0) if no CacheCapacity is set (no auto-calculation).
+// Allocates 70% for metadata cache, 20% for content cache, leaving 10% for other files.
+func calculateMaintenanceCacheLimits(cacheCapacity *resource.Quantity) (metadataMB, contentMB int32) {
+	if cacheCapacity == nil {
+		return 0, 0
+	}
+
+	capacityBytes := cacheCapacity.Value()
+	capacityMB := capacityBytes / (1024 * 1024)
+
+	metadataMB = int32(float64(capacityMB) * 0.70)
+	contentMB = int32(float64(capacityMB) * 0.20)
+	return metadataMB, contentMB
+}
+
+// getCacheLimitEnvVars returns environment variables for Kopia cache size limits.
+// Uses explicit values from spec if set, otherwise auto-calculates from CacheCapacity.
+func getCacheLimitEnvVars(metadataLimit, contentLimit *int32, cacheCapacity *resource.Quantity) []corev1.EnvVar {
+	var envVars []corev1.EnvVar
+
+	metaMB := metadataLimit
+	contentMB := contentLimit
+
+	// Auto-calculate if not explicitly set (nil means auto, 0 means unlimited)
+	if metaMB == nil || contentMB == nil {
+		autoMeta, autoContent := calculateMaintenanceCacheLimits(cacheCapacity)
+		if metaMB == nil && autoMeta > 0 {
+			metaMB = &autoMeta
+		}
+		if contentMB == nil && autoContent > 0 {
+			contentMB = &autoContent
+		}
+	}
+
+	if metaMB != nil && *metaMB > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_METADATA_CACHE_SIZE_LIMIT_MB",
+			Value: strconv.Itoa(int(*metaMB)),
+		})
+	}
+	if contentMB != nil && *contentMB > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB",
+			Value: strconv.Itoa(int(*contentMB)),
+		})
+	}
+
+	return envVars
 }
 
 // KopiaMaintenanceReconciler reconciles a KopiaMaintenance object
@@ -786,7 +838,7 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 							Image:           r.getContainerImage(),
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command:         []string{"/mover-kopia/entry.sh"},
-							Env: []corev1.EnvVar{
+							Env: append([]corev1.EnvVar{
 								{
 									Name:  "DIRECTION",
 									Value: "maintenance",
@@ -799,7 +851,11 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 									Name:  "KOPIA_CACHE_DIR",
 									Value: "/cache",
 								},
-							},
+							}, getCacheLimitEnvVars(
+								maintenance.Spec.MetadataCacheSizeLimitMB,
+								maintenance.Spec.ContentCacheSizeLimitMB,
+								maintenance.Spec.CacheCapacity,
+							)...),
 							EnvFrom: []corev1.EnvFromSource{
 								{
 									SecretRef: &corev1.SecretEnvSource{
@@ -1066,6 +1122,14 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 			Value: "/cache",
 		},
 	}
+
+	// Add cache limit env vars
+	cacheLimitEnvVars := getCacheLimitEnvVars(
+		maintenance.Spec.MetadataCacheSizeLimitMB,
+		maintenance.Spec.ContentCacheSizeLimitMB,
+		maintenance.Spec.CacheCapacity,
+	)
+	envVars = append(envVars, cacheLimitEnvVars...)
 
 	// Build volumes and volume mounts
 	volumes := []corev1.Volume{
