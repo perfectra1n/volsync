@@ -51,7 +51,7 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 		client := fake.NewClientBuilder().Build()
 
 		// Create maintenance manager
-		manager = NewMaintenanceManager(client, logger, "quay.io/backube/volsync-kopia:latest")
+		manager = NewMaintenanceManager(client, logger, "quay.io/backube/volsync-kopia:latest", nil)
 
 		// Create a test ReplicationSource
 		// enabled := true // Field removed
@@ -166,7 +166,8 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 			jobs := []batchv1.Job{
 				{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "maintenance-job-1",
+						Name:              "maintenance-job-1",
+						CreationTimestamp: metav1.Time{Time: now.Add(-2 * time.Hour)}, // More recent
 					},
 					Status: batchv1.JobStatus{
 						StartTime:      &metav1.Time{Time: now.Add(-2 * time.Hour)},
@@ -181,7 +182,8 @@ var _ = Describe("Kopia Maintenance Metrics", func() {
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: "maintenance-job-2",
+						Name:              "maintenance-job-2",
+						CreationTimestamp: metav1.Time{Time: now.Add(-4 * time.Hour)}, // Older
 					},
 					Status: batchv1.JobStatus{
 						StartTime:      &metav1.Time{Time: now.Add(-4 * time.Hour)},

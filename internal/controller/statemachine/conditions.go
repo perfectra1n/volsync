@@ -64,3 +64,13 @@ func setConditionError(r ReplicationMachine, _ logr.Logger, err error) {
 			Message: err.Error(),
 		})
 }
+
+func setConditionCleanup(r ReplicationMachine, _ logr.Logger) {
+	apimeta.SetStatusCondition(r.Conditions(),
+		metav1.Condition{
+			Type:    volsyncv1alpha1.ConditionSynchronizing,
+			Status:  metav1.ConditionFalse,
+			Reason:  volsyncv1alpha1.SynchronizingReasonCleanup,
+			Message: "Cleanup in-progress",
+		})
+}

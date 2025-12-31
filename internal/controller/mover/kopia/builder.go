@@ -45,10 +45,10 @@ const (
 	defaultKopiaContainerImage = "quay.io/backube/volsync:latest"
 	// Command line flag will be checked first
 	// If command line flag not set, the RELATED_IMAGE_ env var will be used
-	kopiaContainerImageFlag               = "kopia-container-image"
-	kopiaContainerImageEnvVar             = "RELATED_IMAGE_KOPIA_CONTAINER"
-	kopiaSuccessfulJobsHistoryLimitFlag   = "kopia-successful-jobs-history-limit"
-	kopiaFailedJobsHistoryLimitFlag       = "kopia-failed-jobs-history-limit"
+	kopiaContainerImageFlag             = "kopia-container-image"
+	kopiaContainerImageEnvVar           = "RELATED_IMAGE_KOPIA_CONTAINER"
+	kopiaSuccessfulJobsHistoryLimitFlag = "kopia-successful-jobs-history-limit"
+	kopiaFailedJobsHistoryLimitFlag     = "kopia-failed-jobs-history-limit"
 	// defaultUsername is the fallback username when sanitization results in empty string
 	defaultUsername = "volsync-default"
 	// maxUsernameLength is the maximum reasonable length for Kopia usernames
@@ -252,7 +252,6 @@ func (kb *Builder) createSourceMover(client client.Client, logger logr.Logger,
 		sourceStatus:          source.Status.Kopia,
 		latestMoverStatus:     source.Status.LatestMoverStatus,
 		moverConfig:           source.Spec.Kopia.MoverConfig,
-		repositoryPVC:         source.Spec.Kopia.RepositoryPVC,
 		additionalArgs:        source.Spec.Kopia.AdditionalArgs,
 		builder:               kb,
 	}

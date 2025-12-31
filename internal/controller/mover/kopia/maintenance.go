@@ -139,7 +139,7 @@ func (rc *RepositoryConfig) Hash() string {
 	// Only include repository-specific fields in the hash
 	// This ensures one CronJob per repository regardless of namespace or schedule
 	repoCfg := struct {
-		Repository string                                 `json:"repository"`
+		Repository string                        `json:"repository"`
 		CustomCA   *volsyncv1alpha1.CustomCASpec `json:"customCA,omitempty"`
 	}{
 		Repository: rc.Repository,
@@ -693,7 +693,6 @@ func (m *MaintenanceManager) ensureRBACPermissions(ctx context.Context) error {
 	return nil
 }
 
-
 // buildMaintenanceCronJob constructs a CronJob for Kopia maintenance
 func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfig,
 	owner client.Object, copiedSecretName string) *batchv1.CronJob {
@@ -720,7 +719,7 @@ func (m *MaintenanceManager) buildMaintenanceCronJob(repoConfig *RepositoryConfi
 				maintenanceNamespaceLabel:  repoConfig.Namespace, // Track source namespace
 			},
 			Annotations: map[string]string{
-				maintenanceRepositoryAnnotation: repoConfig.Repository,
+				maintenanceRepositoryAnnotation:    repoConfig.Repository,
 				"volsync.backube/source-namespace": repoConfig.Namespace,
 			},
 		},

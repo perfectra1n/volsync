@@ -74,20 +74,30 @@ repository
    This is the name of the Secret (in the same Namespace) that holds the
    connection information for the backup repository. See :doc:`backends` for
    supported remote storage backends and configuration examples. For filesystem-based
-   backups using PVCs, also configure the ``repositoryPVC`` field.
+   backups using PVCs, use the ``moverVolumes`` field to mount the repository PVC.
 
-repositoryPVC
-   **ReplicationSource Only**: This option specifies a PVC to use as a filesystem-based backup repository.
-   When set, Kopia will write backups directly to this PVC instead of a remote repository.
-   The PVC must exist in the same namespace as the ReplicationSource.
-   The repository will be created at the fixed path ``/kopia/repository`` within the mounted PVC.
-   
+moverVolumes
+   **ReplicationSource Only**: This option allows mounting additional PVCs or volumes to the mover pod.
+   For filesystem-based backup repositories, the first PVC in the moverVolumes list is automatically
+   detected as the Kopia repository location. The PVC is mounted at ``/mnt/<mountPath>`` where
+   ``<mountPath>`` is specified in the volume configuration.
+
    .. important::
-      This field is only available for ReplicationSource (backup operations).
-      ReplicationDestination does not support ``repositoryPVC`` - you must use a
+      The first PVC in ``moverVolumes`` is used as the repository. If multiple PVCs are present,
+      only the first is used (a warning is logged). This field is only available for ReplicationSource.
+      ReplicationDestination does not support ``moverVolumes`` for repositories - you must use a
       repository secret with appropriate backend configuration for restore operations.
-   
-   See :doc:`filesystem-destination` for detailed configuration and examples.
+
+   .. code-block:: yaml
+
+      moverVolumes:
+      - mountPath: kopia-repo        # Mounted at /mnt/kopia-repo
+        volumeSource:
+          persistentVolumeClaim:
+            claimName: backup-storage-pvc
+
+   See :doc:`filesystem-destination` for detailed configuration and examples, and :doc:`../movervolumes`
+   for more information about the moverVolumes pattern.
 
 sourcePath
    This specifies the path within the source PVC to backup. If not specified,
@@ -1284,7 +1294,7 @@ partially working, or planned for future releases:
    * - Repository Backends (S3, GCS, Azure)
      - Supported
      - All major cloud providers supported
-   * - Filesystem Repository (repositoryPVC)
+   * - Filesystem Repository (moverVolumes)
      - Supported
      - ReplicationSource only, not for ReplicationDestination
    * - Retention Policies (inline)

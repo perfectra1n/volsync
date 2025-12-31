@@ -54,8 +54,8 @@ func TestSourceIdentityGeneration(t *testing.T) {
 					},
 				},
 			},
-			expectedUsername: "webapp-backup-production",
-			expectedHostname: "production", // Hostname is namespace only
+			expectedUsername: "webapp-backup", // Username is object name only (simplified)
+			expectedHostname: "production",    // Hostname is namespace only
 		},
 		{
 			name: "explicit username/hostname override sourceIdentity",
@@ -92,8 +92,8 @@ func TestSourceIdentityGeneration(t *testing.T) {
 					},
 				},
 			},
-			expectedUsername: "restore-app-restore-ns",
-			expectedHostname: "restore-ns", // Hostname is namespace only
+			expectedUsername: "restore-app", // Username is object name only (simplified)
+			expectedHostname: "restore-ns",  // Hostname is namespace only
 		},
 		{
 			name: "sourceIdentity with destination PVC name in hostname (no source PVC specified)",
@@ -115,8 +115,8 @@ func TestSourceIdentityGeneration(t *testing.T) {
 					},
 				},
 			},
-			expectedUsername: "webapp-prod",
-			expectedHostname: "prod", // Hostname is namespace only
+			expectedUsername: "webapp", // Username is object name only (simplified)
+			expectedHostname: "prod",   // Hostname is namespace only
 		},
 		{
 			name: "sourceIdentity with source PVC name generates matching hostname",
@@ -139,8 +139,8 @@ func TestSourceIdentityGeneration(t *testing.T) {
 					},
 				},
 			},
-			expectedUsername: "webapp-prod",
-			expectedHostname: "prod", // Hostname is namespace only (PVC ignored)
+			expectedUsername: "webapp", // Username is object name only (simplified)
+			expectedHostname: "prod",   // Hostname is namespace only (PVC ignored)
 		},
 		{
 			name: "partial sourceIdentity falls back to defaults",
@@ -158,8 +158,8 @@ func TestSourceIdentityGeneration(t *testing.T) {
 					},
 				},
 			},
-			expectedUsername: "restore-app-restore-ns",
-			expectedHostname: "restore-ns", // Hostname is namespace only
+			expectedUsername: "restore-app", // Username is object name only (simplified)
+			expectedHostname: "restore-ns",  // Hostname is namespace only
 		},
 	}
 

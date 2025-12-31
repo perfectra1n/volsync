@@ -28,9 +28,10 @@ Kopia supports various storage backends with their respective configuration form
 .. note::
    **Alternative: Filesystem Destination**
 
-   Instead of configuring a remote storage backend, you can now use a PersistentVolumeClaim
-   as a filesystem-based backup destination. This is ideal for local backups, NFS storage,
-   or air-gapped environments. See :doc:`filesystem-destination` for details.
+   Instead of configuring a remote storage backend, you can use a PersistentVolumeClaim
+   as a filesystem-based backup destination using the ``moverVolumes`` pattern. This is ideal
+   for local backups, NFS storage, or air-gapped environments. See :doc:`filesystem-destination`
+   for details.
 
 S3-compatible storage (AWS S3, MinIO, etc.)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -689,8 +690,10 @@ VolSync's Kopia mover supports a comprehensive set of environment variables for 
 
 **Filesystem Storage Variables**
 
-   When using ``repositoryPVC`` in the ReplicationSource, the controller automatically sets ``KOPIA_REPOSITORY`` to ``filesystem:///kopia/repository``.
-   For manual filesystem configurations, use ``KOPIA_REPOSITORY`` with a ``filesystem://`` URL (e.g., ``filesystem:///mnt/backup``)
+   When using ``moverVolumes`` in the ReplicationSource for a filesystem repository, the controller automatically
+   detects the first PVC and sets ``KOPIA_REPOSITORY`` to ``filesystem:///mnt/<mountPath>`` where ``<mountPath>``
+   is from the moverVolume configuration. For manual filesystem configurations, use ``KOPIA_REPOSITORY`` with a
+   ``filesystem://`` URL (e.g., ``filesystem:///mnt/backup``)
 
 **Backblaze B2 Variables**
 
