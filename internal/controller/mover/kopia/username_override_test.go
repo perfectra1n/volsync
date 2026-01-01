@@ -1,8 +1,25 @@
+//go:build !disable_kopia
+
+/*
+Copyright 2024 The VolSync authors.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 package kopia
 
 import (
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
@@ -176,25 +193,3 @@ var _ = Describe("Kopia Username/Hostname Override", func() {
 		})
 	})
 })
-
-// TestUsernameOverrideIntegration tests that the entry.sh script correctly handles overrides
-func TestUsernameOverrideIntegration(t *testing.T) {
-	// This is a placeholder for integration testing
-	// In practice, this would:
-	// 1. Create a test Kopia repository
-	// 2. Run the entry.sh script with overrides
-	// 3. Verify snapshots are created with correct identity
-	// 4. Test with cached configuration (the main issue scenario)
-
-	t.Run("VerifyEntryScriptHasOverrideSupport", func(_ *testing.T) {
-		// Read the entry.sh script and verify it has the fix
-		// This ensures the snapshot create command includes overrides
-		entryScript := "../../../mover-kopia/entry.sh"
-		// In a real test, we would read the file and check for the fix
-		// For now, we just verify the test compiles
-		_ = entryScript
-
-		// The fix should ensure that do_backup function calls add_user_overrides
-		// for the SNAPSHOT_CMD array
-	})
-}
