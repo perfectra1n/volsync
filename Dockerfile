@@ -66,8 +66,8 @@ RUN go run build.go --enable-cgo
 # Build kopia
 FROM golang-builder AS kopia-builder
 
-ARG KOPIA_VERSION="v0.21.1"
-ARG KOPIA_GIT_HASH="0733cb4d2a731dbb92d927f66230694e014f4df2"
+ARG KOPIA_VERSION="v0.22.3"
+ARG KOPIA_GIT_HASH="154bf56899228e5c95fb3176b9c6901bbe4ca97b"
 
 RUN git clone --depth 1 -b ${KOPIA_VERSION} https://github.com/kopia/kopia.git
 WORKDIR /workspace/kopia
