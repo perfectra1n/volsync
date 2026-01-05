@@ -1891,6 +1891,18 @@ function do_maintenance {
         return 1
     fi
 
+    # Enable quick cycle scheduling (for automatic maintenance between runs)
+    log_info "Enabling quick cycle scheduling..."
+    if ! "${KOPIA[@]}" maintenance set --enable-quick 2>&1; then
+        log_warn "Failed to enable quick cycle scheduling (non-fatal)"
+    fi
+
+    # Run quick maintenance cycle first (handles index compaction)
+    log_info "Running Kopia quick maintenance..."
+    if ! "${KOPIA[@]}" maintenance run 2>&1; then
+        log_warn "Quick maintenance failed, continuing with full maintenance..."
+    fi
+
     # Run full maintenance cycle
     log_info "Running Kopia full maintenance..."
     local maint_exit_code=0
