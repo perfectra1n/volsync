@@ -1,6 +1,6 @@
 module github.com/backube/volsync
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/dop251/diskrsync v1.3.0
@@ -32,10 +32,7 @@ require (
 	sigs.k8s.io/controller-runtime v0.22.3
 )
 
-require (
-	github.com/prometheus/client_model v0.6.2
-	github.com/stretchr/testify v1.11.1
-)
+require github.com/prometheus/client_model v0.6.2
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
@@ -100,6 +97,7 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/syncthing/notify v0.0.0-20250528144937-c7027d4f7465 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d // indirect
