@@ -2008,7 +2008,6 @@ function select_snapshot_to_restore {
     
     # Build the full identity string for listing snapshots
     # When using overrides, we need to specify the full identity: username@hostname:path
-    local identity_string=""
     # Check if source path override is specified
     local snapshot_path=""
     if [[ -n "${KOPIA_SOURCE_PATH_OVERRIDE}" ]]; then
@@ -2024,14 +2023,16 @@ function select_snapshot_to_restore {
         snapshot_path="${DATA_DIR}"
     fi
     
+    # Build the identity string for listing snapshots
+    local identity_string
     if [[ -n "${KOPIA_OVERRIDE_USERNAME}" ]] && [[ -n "${KOPIA_OVERRIDE_HOSTNAME}" ]]; then
         identity_string="${KOPIA_OVERRIDE_USERNAME}@${KOPIA_OVERRIDE_HOSTNAME}:${snapshot_path}"
         echo "Looking for snapshots with identity: ${identity_string}" >&2
     else
-        # No overrides, use default behavior
+        # No overrides, use just the path
         identity_string="${snapshot_path}"
     fi
-    
+
     # List snapshots for the specific identity
     local snapshot_list_cmd=("${KOPIA[@]}" snapshot list "${identity_string}" --json)
     
@@ -2039,16 +2040,26 @@ function select_snapshot_to_restore {
     local -i previous_offset=${KOPIA_PREVIOUS-0}
     
     # List snapshots and find the appropriate one
-    # Capture both stdout and stderr to handle cases where no snapshots exist
+    # Capture stdout (JSON) and stderr (warnings/errors) separately
+    # to avoid kopia warnings (like "too many index blobs") corrupting JSON output
     local snapshot_output
     local snapshot_stderr
-    snapshot_output=$("${snapshot_list_cmd[@]}" 2>&1) || true
-    
-    # Check if the output indicates no snapshots found
-    if [[ "${snapshot_output}" == $'[\n]' ]] || [[ "${snapshot_output}" == "" ]] || 
-       [[ "${snapshot_output}" =~ "unable to find snapshots" ]] || 
-       [[ "${snapshot_output}" =~ "no snapshot manifests found" ]]; then
+    local stderr_file
+    stderr_file=$(mktemp)
+    snapshot_output=$("${snapshot_list_cmd[@]}" 2>"${stderr_file}") || true
+    snapshot_stderr=$(cat "${stderr_file}")
+    rm -f "${stderr_file}"
+
+    # Check if stderr indicates no snapshots found
+    if [[ "${snapshot_stderr}" =~ "unable to find snapshots" ]] ||
+       [[ "${snapshot_stderr}" =~ "no snapshot manifests found" ]]; then
         # No snapshots found for this identity
+        return 0
+    fi
+
+    # Check if stdout is empty or just an empty array
+    if [[ "${snapshot_output}" == "[]" ]] || [[ "${snapshot_output}" == $'[\n]' ]] || [[ "${snapshot_output}" == "" ]]; then
+        # No snapshots found
         return 0
     fi
     
