@@ -1134,53 +1134,62 @@ function ensure_connected {
     log_info "=== Configuring cache directory after connection ==="
     log_debug "Cache directory path: ${KOPIA_CACHE_DIR}"
     local cache_start_time=$(date +%s)
-    declare -a CACHE_CMD
-    CACHE_CMD=("${KOPIA[@]}" cache set --cache-directory="${KOPIA_CACHE_DIR}")
 
-    # Apply metadata cache size limit if specified
-    if [[ -n "${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}" ]]; then
-        if [[ "${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}" =~ ^[0-9]+$ ]]; then
-            log_info "Setting metadata cache size limit: ${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB} MB"
-            CACHE_CMD+=(--metadata-cache-size-limit-mb="${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}")
-        else
-            log_warn "WARNING: Invalid metadata cache size limit '${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}', must be numeric"
-        fi
-    fi
+    # Check if cache configuration can be skipped (limits unchanged from previous run)
+    if [[ "${KOPIA_SKIP_CACHE_CONFIG}" == "true" ]]; then
+        log_info "Cache limits unchanged from previous run, skipping kopia cache set"
+        log_info "  Metadata limit: ${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB:-auto} MB"
+        log_info "  Content limit: ${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB:-auto} MB"
+    else
+        log_info "Configuring cache limits (first run or limits changed)"
+        declare -a CACHE_CMD
+        CACHE_CMD=("${KOPIA[@]}" cache set --cache-directory="${KOPIA_CACHE_DIR}")
 
-    # Apply content cache size limit if specified
-    if [[ -n "${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}" ]]; then
-        if [[ "${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}" =~ ^[0-9]+$ ]]; then
-            log_info "Setting content cache size limit: ${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB} MB"
-            CACHE_CMD+=(--content-cache-size-limit-mb="${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}")
-        else
-            log_warn "WARNING: Invalid content cache size limit '${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}', must be numeric"
-        fi
-    fi
-
-    # Apply manual cache configuration if specified
-    if [[ -n "${KOPIA_MANUAL_CACHING_CONFIG}" && "${KOPIA_MANUAL_CACHING_CONFIG}" != "null" ]]; then
-        echo "Applying manual cache configuration..."
-        
-        local max_cache_size
-        max_cache_size=$(echo "${KOPIA_MANUAL_CACHING_CONFIG}" | jq -r '.maxCacheSize // empty')
-        
-        if [[ -n "${max_cache_size}" && "${max_cache_size}" != "null" ]]; then
-            if [[ "${max_cache_size}" =~ ^[0-9]+$ ]]; then
-                echo "  Using maximum cache size: ${max_cache_size} bytes"
-                CACHE_CMD+=(--max-size="${max_cache_size}")
+        # Apply metadata cache size limit if specified
+        if [[ -n "${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}" ]]; then
+            if [[ "${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}" =~ ^[0-9]+$ ]]; then
+                log_info "Setting metadata cache size limit: ${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB} MB"
+                CACHE_CMD+=(--metadata-cache-size-limit-mb="${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}")
             else
-                echo "  WARNING: Invalid cache max size '${max_cache_size}', must be numeric in bytes"
+                log_warn "WARNING: Invalid metadata cache size limit '${KOPIA_METADATA_CACHE_SIZE_LIMIT_MB}', must be numeric"
             fi
         fi
-    fi
-    
-    log_debug "Executing cache command: ${CACHE_CMD[*]}"
-    if ! "${CACHE_CMD[@]}"; then
-        error 1 "Failed to set cache directory"
+
+        # Apply content cache size limit if specified
+        if [[ -n "${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}" ]]; then
+            if [[ "${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}" =~ ^[0-9]+$ ]]; then
+                log_info "Setting content cache size limit: ${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB} MB"
+                CACHE_CMD+=(--content-cache-size-limit-mb="${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}")
+            else
+                log_warn "WARNING: Invalid content cache size limit '${KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB}', must be numeric"
+            fi
+        fi
+
+        # Apply manual cache configuration if specified
+        if [[ -n "${KOPIA_MANUAL_CACHING_CONFIG}" && "${KOPIA_MANUAL_CACHING_CONFIG}" != "null" ]]; then
+            echo "Applying manual cache configuration..."
+
+            local max_cache_size
+            max_cache_size=$(echo "${KOPIA_MANUAL_CACHING_CONFIG}" | jq -r '.maxCacheSize // empty')
+
+            if [[ -n "${max_cache_size}" && "${max_cache_size}" != "null" ]]; then
+                if [[ "${max_cache_size}" =~ ^[0-9]+$ ]]; then
+                    echo "  Using maximum cache size: ${max_cache_size} bytes"
+                    CACHE_CMD+=(--max-size="${max_cache_size}")
+                else
+                    echo "  WARNING: Invalid cache max size '${max_cache_size}', must be numeric in bytes"
+                fi
+            fi
+        fi
+
+        log_debug "Executing cache command: ${CACHE_CMD[*]}"
+        if ! "${CACHE_CMD[@]}"; then
+            error 1 "Failed to set cache directory"
+        fi
     fi
     local cache_end_time=$(date +%s)
     log_timing "Cache directory configuration took $((cache_end_time - cache_start_time)) seconds"
-    log_info "Cache directory configured successfully at ${KOPIA_CACHE_DIR}"
+    log_info "Cache directory ready at ${KOPIA_CACHE_DIR}"
 
     local connection_end_time=$(date +%s)
     log_timing "Total repository connection process took $((connection_end_time - connection_start_time)) seconds"

@@ -149,6 +149,9 @@ type Mover struct {
 	cleanupCachePVC             bool
 	enableFileDeletionOnRestore bool
 	destinationStatus           *volsyncv1alpha1.ReplicationDestinationKopiaStatus
+	// Calculated cache limits for status update after successful job
+	calculatedMetadataCacheLimit *int32
+	calculatedContentCacheLimit  *int32
 }
 
 var _ mover.Mover = &Mover{}
@@ -944,6 +947,45 @@ func (m *Mover) addAdditionalArgsEnvVar(envVars []corev1.EnvVar) []corev1.EnvVar
 	return envVars
 }
 
+// shouldSkipCacheConfig determines if cache configuration can be skipped because
+// the limits haven't changed since the last successful configuration.
+// Returns true if both metadata and content limits match the last configured values.
+func (m *Mover) shouldSkipCacheConfig(metadataLimit, contentLimit *int32) bool {
+	var lastMetadata, lastContent *int32
+
+	// Get last configured limits from the appropriate status based on source/destination
+	if m.isSource && m.sourceStatus != nil {
+		lastMetadata = m.sourceStatus.LastConfiguredMetadataCacheSizeLimitMB
+		lastContent = m.sourceStatus.LastConfiguredContentCacheSizeLimitMB
+	} else if !m.isSource && m.destinationStatus != nil {
+		lastMetadata = m.destinationStatus.LastConfiguredMetadataCacheSizeLimitMB
+		lastContent = m.destinationStatus.LastConfiguredContentCacheSizeLimitMB
+	}
+
+	// If we have no previous configuration, we cannot skip
+	if lastMetadata == nil && lastContent == nil {
+		return false
+	}
+
+	// Compare metadata limits
+	metadataMatch := false
+	if metadataLimit == nil && lastMetadata == nil {
+		metadataMatch = true
+	} else if metadataLimit != nil && lastMetadata != nil {
+		metadataMatch = *metadataLimit == *lastMetadata
+	}
+
+	// Compare content limits
+	contentMatch := false
+	if contentLimit == nil && lastContent == nil {
+		contentMatch = true
+	} else if contentLimit != nil && lastContent != nil {
+		contentMatch = *contentLimit == *lastContent
+	}
+
+	return metadataMatch && contentMatch
+}
+
 // addCacheLimitEnvVars adds cache size limit environment variables.
 // Called from both addSourceEnvVars and addDestinationEnvVars since
 // both source and destination jobs connect to the repository and use cache.
@@ -962,6 +1004,21 @@ func (m *Mover) addCacheLimitEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 		}
 	}
 
+	// Store the calculated limits for status update after successful job completion
+	m.calculatedMetadataCacheLimit = metadataLimit
+	m.calculatedContentCacheLimit = contentLimit
+
+	// Check if we can skip cache configuration because limits haven't changed
+	if m.shouldSkipCacheConfig(metadataLimit, contentLimit) {
+		m.logger.V(1).Info("Cache limits unchanged, skipping cache configuration",
+			"metadataLimit", metadataLimit, "contentLimit", contentLimit)
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_SKIP_CACHE_CONFIG",
+			Value: "true",
+		})
+	}
+
+	// Always add the limit env vars (for first run or when changed)
 	if metadataLimit != nil && *metadataLimit > 0 {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "KOPIA_METADATA_CACHE_SIZE_LIMIT_MB",
@@ -1481,6 +1538,9 @@ func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 	}
 
 	// Job completed successfully
+	// Update the cache limit status with the limits that were configured
+	m.updateCacheLimitStatus()
+
 	// Clear discovery status on successful restore
 	if !m.isSource && m.destinationStatus != nil {
 		m.destinationStatus.AvailableIdentities = nil
@@ -1498,6 +1558,25 @@ func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 
 	// On the source, just signal completion
 	return mover.Complete(), nil
+}
+
+// updateCacheLimitStatus updates the status with the cache limits that were configured
+// during this successful job run. This enables skipping cache configuration on subsequent
+// runs when limits haven't changed.
+func (m *Mover) updateCacheLimitStatus() {
+	if m.isSource && m.sourceStatus != nil {
+		m.sourceStatus.LastConfiguredMetadataCacheSizeLimitMB = m.calculatedMetadataCacheLimit
+		m.sourceStatus.LastConfiguredContentCacheSizeLimitMB = m.calculatedContentCacheLimit
+		m.logger.V(1).Info("Updated source cache limit status",
+			"metadataLimit", m.calculatedMetadataCacheLimit,
+			"contentLimit", m.calculatedContentCacheLimit)
+	} else if !m.isSource && m.destinationStatus != nil {
+		m.destinationStatus.LastConfiguredMetadataCacheSizeLimitMB = m.calculatedMetadataCacheLimit
+		m.destinationStatus.LastConfiguredContentCacheSizeLimitMB = m.calculatedContentCacheLimit
+		m.logger.V(1).Info("Updated destination cache limit status",
+			"metadataLimit", m.calculatedMetadataCacheLimit,
+			"contentLimit", m.calculatedContentCacheLimit)
+	}
 }
 
 // recordOperationSuccess records metrics for successful operations

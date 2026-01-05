@@ -6006,6 +6006,16 @@ spec:
                           - snapshotCount
                         type: object
                       type: array
+                    lastConfiguredContentCacheSizeLimitMB:
+                      description: LastConfiguredContentCacheSizeLimitMB is the content cache limit that was last applied.
+                      format: int32
+                      type: integer
+                    lastConfiguredMetadataCacheSizeLimitMB:
+                      description: |-
+                        LastConfiguredMetadataCacheSizeLimitMB is the metadata cache limit that was last applied.
+                        Used to skip redundant cache configuration on subsequent runs.
+                      format: int32
+                      type: integer
                     requestedIdentity:
                       description: RequestedIdentity is the username@hostname that was requested for restore
                       type: string

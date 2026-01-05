@@ -7234,6 +7234,16 @@ spec:
                     kopiaMaintenance:
                       description: kopiaMaintenance is the name of the KopiaMaintenance resource managing this source's maintenance
                       type: string
+                    lastConfiguredContentCacheSizeLimitMB:
+                      description: LastConfiguredContentCacheSizeLimitMB is the content cache limit that was last applied.
+                      format: int32
+                      type: integer
+                    lastConfiguredMetadataCacheSizeLimitMB:
+                      description: |-
+                        LastConfiguredMetadataCacheSizeLimitMB is the metadata cache limit that was last applied.
+                        Used to skip redundant cache configuration on subsequent runs.
+                      format: int32
+                      type: integer
                     lastMaintenance:
                       description: lastMaintenance in the object holding the time of last maintenance
                       format: date-time

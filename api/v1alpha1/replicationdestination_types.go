@@ -408,6 +408,13 @@ type ReplicationDestinationKopiaStatus struct {
 	// AvailableIdentities lists the identities available in the repository
 	//+optional
 	AvailableIdentities []KopiaIdentityInfo `json:"availableIdentities,omitempty"`
+	// LastConfiguredMetadataCacheSizeLimitMB is the metadata cache limit that was last applied.
+	// Used to skip redundant cache configuration on subsequent runs.
+	// +optional
+	LastConfiguredMetadataCacheSizeLimitMB *int32 `json:"lastConfiguredMetadataCacheSizeLimitMB,omitempty"`
+	// LastConfiguredContentCacheSizeLimitMB is the content cache limit that was last applied.
+	// +optional
+	LastConfiguredContentCacheSizeLimitMB *int32 `json:"lastConfiguredContentCacheSizeLimitMB,omitempty"`
 }
 
 // ReplicationDestinationStatus defines the observed state of ReplicationDestination

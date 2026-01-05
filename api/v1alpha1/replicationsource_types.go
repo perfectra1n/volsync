@@ -356,6 +356,13 @@ type ReplicationSourceKopiaStatus struct {
 	// kopiaMaintenance is the name of the KopiaMaintenance resource managing this source's maintenance
 	//+optional
 	KopiaMaintenance string `json:"kopiaMaintenance,omitempty"`
+	// LastConfiguredMetadataCacheSizeLimitMB is the metadata cache limit that was last applied.
+	// Used to skip redundant cache configuration on subsequent runs.
+	// +optional
+	LastConfiguredMetadataCacheSizeLimitMB *int32 `json:"lastConfiguredMetadataCacheSizeLimitMB,omitempty"`
+	// LastConfiguredContentCacheSizeLimitMB is the content cache limit that was last applied.
+	// +optional
+	LastConfiguredContentCacheSizeLimitMB *int32 `json:"lastConfiguredContentCacheSizeLimitMB,omitempty"`
 }
 
 // define the Syncthing field
