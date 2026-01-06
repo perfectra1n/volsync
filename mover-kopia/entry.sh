@@ -1893,7 +1893,7 @@ function do_maintenance {
 
     # Enable quick cycle scheduling (for automatic maintenance between runs)
     log_info "Enabling quick cycle scheduling..."
-    if ! "${KOPIA[@]}" maintenance set --enable-quick 2>&1; then
+    if ! "${KOPIA[@]}" maintenance set --enable-quick=true 2>&1; then
         log_warn "Failed to enable quick cycle scheduling (non-fatal)"
     fi
 
