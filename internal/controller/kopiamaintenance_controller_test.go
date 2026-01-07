@@ -19,6 +19,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,6 +36,17 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+// generateCronJobName generates the CronJob name the same way the controller does
+func generateCronJobName(namespace, name string) string {
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s", namespace, name)))
+	maxNameLength := 34
+	truncatedName := name
+	if len(truncatedName) > maxNameLength {
+		truncatedName = truncatedName[:maxNameLength]
+	}
+	return fmt.Sprintf("kopia-maint-%s-%x", truncatedName, hash[:8])
+}
 
 func TestKopiaMaintenanceReconciler_calculateNextScheduledTime(t *testing.T) {
 	r := &KopiaMaintenanceReconciler{
@@ -579,6 +592,507 @@ func TestKopiaMaintenanceReconciler_EnsureCronJob(t *testing.T) {
 		}
 		if len(resources.Limits) != 0 {
 			t.Errorf("Expected empty resource limits, got %v", resources.Limits)
+		}
+	})
+}
+
+func TestKopiaMaintenanceReconciler_EnsureCronJob_Updates(t *testing.T) {
+	// Setup the scheme
+	s := runtime.NewScheme()
+	_ = corev1.AddToScheme(s)
+	_ = batchv1.AddToScheme(s)
+	_ = volsyncv1alpha1.AddToScheme(s)
+
+	// Helper function to create a basic CronJob for testing updates
+	createBasicCronJob := func(cronJobName, namespace, maintName string) *batchv1.CronJob {
+		return &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cronJobName,
+				Namespace: namespace,
+			},
+			Spec: batchv1.CronJobSpec{
+				Schedule: "0 2 * * *",
+				JobTemplate: batchv1.JobTemplateSpec{
+					Spec: batchv1.JobSpec{
+						ActiveDeadlineSeconds: ptr.To(int64(10800)),
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"volsync.backube/kopia-maintenance": "true",
+									"volsync.backube/maintenance-name":  maintName,
+								},
+							},
+							Spec: corev1.PodSpec{
+								ServiceAccountName: "default",
+								SecurityContext: &corev1.PodSecurityContext{
+									RunAsNonRoot: ptr.To(true),
+									RunAsUser:    ptr.To(int64(1000)),
+									FSGroup:      ptr.To(int64(1000)),
+								},
+								Containers: []corev1.Container{
+									{
+										Name:  "kopia-maintenance",
+										Image: "quay.io/backube/volsync:old",
+										SecurityContext: &corev1.SecurityContext{
+											AllowPrivilegeEscalation: ptr.To(false),
+											ReadOnlyRootFilesystem:   ptr.To(true),
+											RunAsNonRoot:             ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("CronJob update - container image change", func(t *testing.T) {
+		namespace := "test-ns-img"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+			},
+		}
+
+		// Create existing CronJob with old image
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:new", // New image
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify image was updated
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			if len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+				img := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+				if img != "quay.io/backube/volsync:new" {
+					t.Errorf("Expected image to be updated to new, got %s", img)
+				}
+			}
+		}
+	})
+
+	t.Run("CronJob update - activeDeadlineSeconds change", func(t *testing.T) {
+		namespace := "test-ns-deadline"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		newDeadline := int64(43200) // 12 hours
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				ActiveDeadlineSeconds: &newDeadline,
+			},
+		}
+
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:old",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify activeDeadlineSeconds was updated
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			if cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds == nil {
+				t.Error("Expected ActiveDeadlineSeconds to be set")
+			} else if *cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds != newDeadline {
+				t.Errorf("Expected ActiveDeadlineSeconds to be %d, got %d",
+					newDeadline, *cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds)
+			}
+		}
+	})
+
+	t.Run("CronJob update - serviceAccountName change", func(t *testing.T) {
+		namespace := "test-ns-sa"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		newSA := "custom-sa"
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				ServiceAccountName: &newSA,
+			},
+		}
+
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:old",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify serviceAccountName was updated
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			sa := cj.Spec.JobTemplate.Spec.Template.Spec.ServiceAccountName
+			if sa != newSA {
+				t.Errorf("Expected ServiceAccountName to be %s, got %s", newSA, sa)
+			}
+		}
+	})
+
+	t.Run("CronJob update - nodeSelector change", func(t *testing.T) {
+		namespace := "test-ns-node"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				NodeSelector: map[string]string{
+					"node-type": "backup",
+					"disk":      "ssd",
+				},
+			},
+		}
+
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:old",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify nodeSelector was updated
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			ns := cj.Spec.JobTemplate.Spec.Template.Spec.NodeSelector
+			if ns == nil || ns["node-type"] != "backup" || ns["disk"] != "ssd" {
+				t.Errorf("Expected NodeSelector to have node-type=backup and disk=ssd, got %v", ns)
+			}
+		}
+	})
+
+	t.Run("CronJob update - tolerations change", func(t *testing.T) {
+		namespace := "test-ns-tol"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				Tolerations: []corev1.Toleration{
+					{
+						Key:      "dedicated",
+						Operator: corev1.TolerationOpEqual,
+						Value:    "backup",
+						Effect:   corev1.TaintEffectNoSchedule,
+					},
+				},
+			},
+		}
+
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:old",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify tolerations were updated
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			tols := cj.Spec.JobTemplate.Spec.Template.Spec.Tolerations
+			if len(tols) != 1 {
+				t.Errorf("Expected 1 toleration, got %d", len(tols))
+			} else if tols[0].Key != "dedicated" || tols[0].Value != "backup" {
+				t.Errorf("Expected toleration key=dedicated value=backup, got %v", tols[0])
+			}
+		}
+	})
+
+	t.Run("CronJob update - moverPodLabels change", func(t *testing.T) {
+		namespace := "test-ns-labels"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				MoverPodLabels: map[string]string{
+					"environment": "production",
+					"team":        "platform",
+				},
+			},
+		}
+
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:old",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify labels were updated (should include both volsync labels and custom labels)
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			labels := cj.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels
+			if labels["environment"] != "production" {
+				t.Errorf("Expected label environment=production, got %s", labels["environment"])
+			}
+			if labels["team"] != "platform" {
+				t.Errorf("Expected label team=platform, got %s", labels["team"])
+			}
+			// Also verify volsync labels are preserved
+			if labels["volsync.backube/kopia-maintenance"] != "true" {
+				t.Error("Expected volsync label to be preserved")
+			}
+		}
+	})
+
+	t.Run("CronJob update - affinity change", func(t *testing.T) {
+		namespace := "test-ns-affinity"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				Affinity: &corev1.Affinity{
+					NodeAffinity: &corev1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+							NodeSelectorTerms: []corev1.NodeSelectorTerm{
+								{
+									MatchExpressions: []corev1.NodeSelectorRequirement{
+										{
+											Key:      "node-type",
+											Operator: corev1.NodeSelectorOpIn,
+											Values:   []string{"high-memory"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		existingCronJob := createBasicCronJob(cronJobName, namespace, maintName)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:old",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify affinity was updated
+		cronJobList := &batchv1.CronJobList{}
+		_ = fakeClient.List(context.Background(), cronJobList)
+		for _, cj := range cronJobList.Items {
+			affinity := cj.Spec.JobTemplate.Spec.Template.Spec.Affinity
+			if affinity == nil || affinity.NodeAffinity == nil {
+				t.Error("Expected Affinity to be set")
+			} else {
+				req := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+				if req == nil || len(req.NodeSelectorTerms) == 0 {
+					t.Error("Expected NodeSelectorTerms to be set")
+				}
+			}
 		}
 	})
 }
