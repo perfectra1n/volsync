@@ -160,6 +160,14 @@ Optional Fields
    - Default limits: 1Gi memory
    - Configure based on repository size and performance requirements
 
+**activeDeadlineSeconds** (*integer*, optional)
+   Maximum duration in seconds for maintenance jobs before termination.
+
+   - Default: ``10800`` (3 hours)
+   - Minimum: ``600`` (10 minutes)
+   - Increase for very large repositories that require longer maintenance windows
+   - Jobs exceeding this limit are terminated by Kubernetes
+
 **serviceAccountName** (*string*, optional)
    Custom ServiceAccount for maintenance jobs.
    If not specified, uses default maintenance ServiceAccount.
@@ -190,6 +198,19 @@ Optional Fields
 **affinity** (*Affinity*, optional)
    Pod affinity rules for maintenance jobs.
    Supports nodeAffinity, podAffinity, and podAntiAffinity.
+
+**nodeSelector** (*map[string]string*, optional)
+   Node selector constraints for maintenance pods.
+   Use to schedule maintenance jobs on specific nodes.
+
+   Example: ``node-type: high-memory``
+
+**tolerations** (*[]Toleration*, optional)
+   Tolerations for maintenance pods.
+   Allows scheduling on nodes with matching taints.
+
+   Supports standard Kubernetes toleration fields:
+   ``key``, ``operator``, ``value``, ``effect``, ``tolerationSeconds``
 
 **cacheCapacity** (*Quantity*, optional)
    Size of the Kopia metadata cache volume.
@@ -379,6 +400,71 @@ High-Performance Maintenance with Cache
              - key: node-type
                operator: In
                values: ["high-memory"]
+
+Scheduling with NodeSelector and Tolerations
+--------------------------------------------
+
+Schedule maintenance on specific nodes with taints:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: dedicated-node-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: prod-backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     # Schedule on nodes with specific labels
+     nodeSelector:
+       node-role: backup-worker
+       disk-type: ssd
+     # Tolerate taints on dedicated backup nodes
+     tolerations:
+       - key: "dedicated"
+         operator: "Equal"
+         value: "backup"
+         effect: "NoSchedule"
+       - key: "backup-only"
+         operator: "Exists"
+         effect: "NoExecute"
+         tolerationSeconds: 3600
+     resources:
+       requests:
+         memory: "1Gi"
+       limits:
+         memory: "4Gi"
+
+Long-Running Maintenance with Extended Timeout
+----------------------------------------------
+
+For very large repositories that need more than the default 3-hour timeout:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: large-repo-extended-timeout
+     namespace: archive
+   spec:
+     repository:
+       repository: archive-backup-config
+     trigger:
+       schedule: "0 0 * * 6"  # Weekly on Saturday midnight
+     activeDeadlineSeconds: 43200  # 12 hours for very large repos
+     resources:
+       requests:
+         memory: "4Gi"
+         cpu: "2"
+       limits:
+         memory: "16Gi"
+         cpu: "8"
+     cacheCapacity: 50Gi
+     cacheStorageClassName: fast-ssd
 
 Cache Configuration Examples
 ----------------------------

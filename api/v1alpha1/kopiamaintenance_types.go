@@ -166,14 +166,12 @@ type KopiaMaintenanceSpec struct {
 	MoverPodLabels map[string]string `json:"moverPodLabels,omitempty"`
 
 	// NodeSelector for maintenance pods.
-	// NOTE: This field is preserved for future implementation. Currently, NodeSelector is not
-	// directly supported by the Kopia mover spec and will be ignored.
+	// Use to schedule maintenance jobs on specific nodes.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations for maintenance pods.
-	// NOTE: This field is preserved for future implementation. Currently, Tolerations are not
-	// directly supported by the Kopia mover spec and will be ignored.
+	// Allows scheduling on nodes with matching taints.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
