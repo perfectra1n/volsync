@@ -21,6 +21,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"maps"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -893,7 +895,7 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 			// Exponential backoff configuration
 			// Starts at 10 seconds and doubles up to 6 times (max ~10 minutes)
 			ActiveDeadlineSeconds:   ptr.To(maintenance.GetActiveDeadlineSeconds()), // Configurable timeout (default: 3 hours)
-			TTLSecondsAfterFinished: ptr.To(int32(3600)), // Clean up after 1 hour
+			TTLSecondsAfterFinished: ptr.To(int32(3600)),                            // Clean up after 1 hour
 		},
 	}
 
@@ -1061,6 +1063,101 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 					"oldContext", existingContainerSecurityContext,
 					"newContext", desiredContainerSecurityContext)
 			}
+		}
+
+		// Check if Container Image needs updating
+		desiredImage := r.getContainerImage()
+		if len(existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+			existingImage := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+			if existingImage != desiredImage {
+				existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image = desiredImage
+				updateNeeded = true
+				r.Log.Info("Updating maintenance CronJob Container Image",
+					"name", cronJobName,
+					"oldImage", existingImage,
+					"newImage", desiredImage)
+			}
+		}
+
+		// Check if ActiveDeadlineSeconds needs updating
+		desiredActiveDeadlineSeconds := maintenance.GetActiveDeadlineSeconds()
+		existingActiveDeadlineSeconds := existingCronJob.Spec.JobTemplate.Spec.ActiveDeadlineSeconds
+		if existingActiveDeadlineSeconds == nil || *existingActiveDeadlineSeconds != desiredActiveDeadlineSeconds {
+			existingCronJob.Spec.JobTemplate.Spec.ActiveDeadlineSeconds = ptr.To(desiredActiveDeadlineSeconds)
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob ActiveDeadlineSeconds",
+				"name", cronJobName,
+				"oldActiveDeadlineSeconds", existingActiveDeadlineSeconds,
+				"newActiveDeadlineSeconds", desiredActiveDeadlineSeconds)
+		}
+
+		// Check if ServiceAccountName needs updating
+		desiredServiceAccountName := "default"
+		if maintenance.Spec.ServiceAccountName != nil {
+			desiredServiceAccountName = *maintenance.Spec.ServiceAccountName
+		}
+		existingServiceAccountName := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.ServiceAccountName
+		if existingServiceAccountName != desiredServiceAccountName {
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.ServiceAccountName = desiredServiceAccountName
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob ServiceAccountName",
+				"name", cronJobName,
+				"oldServiceAccountName", existingServiceAccountName,
+				"newServiceAccountName", desiredServiceAccountName)
+		}
+
+		// Check if MoverPodLabels need updating
+		desiredLabels := map[string]string{
+			"volsync.backube/kopia-maintenance": "true",
+			"volsync.backube/maintenance-name":  maintenance.Name,
+		}
+		for k, v := range maintenance.Spec.MoverPodLabels {
+			desiredLabels[k] = v
+		}
+		existingLabels := existingCronJob.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels
+		if !maps.Equal(existingLabels, desiredLabels) {
+			existingCronJob.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels = desiredLabels
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob MoverPodLabels",
+				"name", cronJobName,
+				"oldLabels", existingLabels,
+				"newLabels", desiredLabels)
+		}
+
+		// Check if Affinity needs updating
+		desiredAffinity := maintenance.Spec.Affinity
+		existingAffinity := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity
+		if !reflect.DeepEqual(existingAffinity, desiredAffinity) {
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Affinity = desiredAffinity
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob Affinity",
+				"name", cronJobName,
+				"oldAffinity", existingAffinity,
+				"newAffinity", desiredAffinity)
+		}
+
+		// Check if NodeSelector needs updating
+		desiredNodeSelector := maintenance.Spec.NodeSelector
+		existingNodeSelector := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector
+		if !maps.Equal(existingNodeSelector, desiredNodeSelector) {
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector = desiredNodeSelector
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob NodeSelector",
+				"name", cronJobName,
+				"oldNodeSelector", existingNodeSelector,
+				"newNodeSelector", desiredNodeSelector)
+		}
+
+		// Check if Tolerations need updating
+		desiredTolerations := maintenance.Spec.Tolerations
+		existingTolerations := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Tolerations
+		if !reflect.DeepEqual(existingTolerations, desiredTolerations) {
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Tolerations = desiredTolerations
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob Tolerations",
+				"name", cronJobName,
+				"oldTolerations", existingTolerations,
+				"newTolerations", desiredTolerations)
 		}
 
 		if updateNeeded {
@@ -1303,9 +1400,10 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 									}(),
 								},
 							},
-							Volumes:  volumes,
-							Affinity: maintenance.Spec.Affinity,
-							// Note: NodeSelector and Tolerations are preserved in spec but not yet fully supported
+							Volumes:      volumes,
+							Affinity:     maintenance.Spec.Affinity,
+							NodeSelector: maintenance.Spec.NodeSelector,
+							Tolerations:  maintenance.Spec.Tolerations,
 						},
 					},
 				},
