@@ -77,6 +77,105 @@ log_timing() {
     echo "TIMING: $*"
 }
 
+# Cache exhaustion detection for EmptyDir eviction scenarios
+# Returns cache usage info as "used_bytes total_bytes percentage"
+get_cache_usage() {
+    local cache_dir="${KOPIA_CACHE_DIR:-/cache}"
+    if [[ ! -d "${cache_dir}" ]]; then
+        echo "0 0 0"
+        return
+    fi
+
+    # Get actual disk usage of cache directory
+    local used_bytes
+    used_bytes=$(du -sb "${cache_dir}" 2>/dev/null | awk '{print $1}' || echo "0")
+
+    # Get capacity from env var (set by controller)
+    local capacity_bytes="${KOPIA_CACHE_CAPACITY_BYTES:-8589934592}"  # Default 8Gi
+
+    # Calculate percentage
+    local percentage=0
+    if [[ ${capacity_bytes} -gt 0 ]]; then
+        percentage=$((used_bytes * 100 / capacity_bytes))
+    fi
+
+    echo "${used_bytes} ${capacity_bytes} ${percentage}"
+}
+
+# Format bytes to human-readable (e.g., 8589934592 -> 8.0Gi)
+format_bytes() {
+    local bytes=$1
+    if [[ ${bytes} -ge 1073741824 ]]; then
+        echo "$(awk "BEGIN {printf \"%.1f\", ${bytes}/1073741824}")Gi"
+    elif [[ ${bytes} -ge 1048576 ]]; then
+        echo "$(awk "BEGIN {printf \"%.1f\", ${bytes}/1048576}")Mi"
+    elif [[ ${bytes} -ge 1024 ]]; then
+        echo "$(awk "BEGIN {printf \"%.1f\", ${bytes}/1024}")Ki"
+    else
+        echo "${bytes}B"
+    fi
+}
+
+# Check if cache is near or at capacity (called on SIGTERM)
+check_cache_exhaustion() {
+    local usage_info
+    usage_info=$(get_cache_usage)
+    local used_bytes=$(echo "${usage_info}" | awk '{print $1}')
+    local capacity_bytes=$(echo "${usage_info}" | awk '{print $2}')
+    local percentage=$(echo "${usage_info}" | awk '{print $3}')
+
+    local used_human=$(format_bytes "${used_bytes}")
+    local capacity_human=$(format_bytes "${capacity_bytes}")
+
+    if [[ ${percentage} -ge 90 ]]; then
+        echo ""
+        echo "========================================================================"
+        echo "ERROR: CACHE EXHAUSTION DETECTED"
+        echo "========================================================================"
+        echo "Cache usage: ${used_human} / ${capacity_human} (${percentage}%)"
+        echo ""
+        echo "The pod is being terminated because the Kopia cache exceeded the"
+        echo "EmptyDir volume limit. This typically happens during large restores"
+        echo "or backups when the cache grows beyond its allocated size."
+        echo ""
+        echo "SOLUTION: Increase cacheCapacity in your ReplicationSource/Destination:"
+        echo ""
+        echo "  spec:"
+        echo "    kopia:"
+        echo "      cacheCapacity: \"20Gi\"  # Increase this value"
+        echo ""
+        echo "Or use a PVC-backed cache instead of EmptyDir:"
+        echo ""
+        echo "  spec:"
+        echo "    kopia:"
+        echo "      cacheStorageClassName: \"your-storage-class\""
+        echo "      cacheCapacity: \"20Gi\""
+        echo ""
+        echo "========================================================================"
+        return 0  # Cache exhaustion detected
+    fi
+    return 1  # No exhaustion
+}
+
+# SIGTERM handler - Kubernetes sends SIGTERM before evicting/killing pods
+handle_sigterm() {
+    local exit_code=$?
+    echo ""
+    log_warn "Received SIGTERM signal - pod is being terminated"
+
+    # Check if this might be due to cache exhaustion
+    if check_cache_exhaustion; then
+        # Exit with a distinct code to indicate cache exhaustion
+        exit 137
+    fi
+
+    echo "Pod termination not due to cache exhaustion"
+    exit "${exit_code}"
+}
+
+# Install SIGTERM trap for cache exhaustion detection
+trap handle_sigterm SIGTERM
+
 log_info "VolSync kopia container version: ${version:-unknown}"
 log_info "Arguments: $@"
 echo
@@ -174,11 +273,19 @@ echo "HOME: ${HOME}"
 echo "KOPIA_CACHE_DIR: ${KOPIA_CACHE_DIR}"
 echo "KOPIA_CACHE_DIRECTORY: ${KOPIA_CACHE_DIRECTORY}"
 echo "KOPIA_LOG_DIR: ${KOPIA_LOG_DIR}"
+echo "KOPIA_CACHE_CAPACITY_BYTES: ${KOPIA_CACHE_CAPACITY_BYTES:-8589934592} ($(format_bytes ${KOPIA_CACHE_CAPACITY_BYTES:-8589934592}))"
 echo "Current user: $(whoami)"
 echo "Current working directory: $(pwd)"
 echo "Cache directory writable: $(test -w ${KOPIA_CACHE_DIR} && echo 'Yes' || echo 'No')"
 echo "Log directory exists: $(test -d ${KOPIA_LOG_DIR} && echo 'Yes' || echo 'No')"
 echo "Contents of cache directory: $(ls -la ${KOPIA_CACHE_DIR} 2>/dev/null || echo 'Directory does not exist')"
+
+# Show current cache usage
+cache_info=$(get_cache_usage)
+cache_used=$(echo "${cache_info}" | awk '{print $1}')
+cache_capacity=$(echo "${cache_info}" | awk '{print $2}')
+cache_pct=$(echo "${cache_info}" | awk '{print $3}')
+echo "Cache usage: $(format_bytes ${cache_used}) / $(format_bytes ${cache_capacity}) (${cache_pct}%)"
 echo ""
 echo "=== ENVIRONMENT VARIABLES STATUS ==="
 echo "KOPIA_REPOSITORY: $([ -n "${KOPIA_REPOSITORY}" ] && echo "[SET]" || echo "[NOT SET]")"
@@ -201,6 +308,7 @@ echo "KOPIA_SHALLOW: $([ -n "${KOPIA_SHALLOW}" ] && echo "[SET]" || echo "[NOT S
 echo "KOPIA_PREVIOUS: $([ -n "${KOPIA_PREVIOUS}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_ENABLE_FILE_DELETION: $([ -n "${KOPIA_ENABLE_FILE_DELETION}" ] && echo "[SET]" || echo "[NOT SET]")"
 echo "KOPIA_ADDITIONAL_ARGS: $([ -n "${KOPIA_ADDITIONAL_ARGS}" ] && echo "[SET]" || echo "[NOT SET]")"
+echo "KOPIA_CACHE_CAPACITY_BYTES: $([ -n "${KOPIA_CACHE_CAPACITY_BYTES}" ] && echo "[SET] ($(format_bytes ${KOPIA_CACHE_CAPACITY_BYTES}))" || echo "[NOT SET] (default: 8Gi)")"
 echo ""
 echo "=== Log Configuration ==="
 echo "KOPIA_LOG_LEVEL: ${KOPIA_LOG_LEVEL}"  # Console/stdout log level

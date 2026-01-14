@@ -378,6 +378,18 @@ func (m *Mover) calculateCacheLimits() (metadataMB, contentMB int32) {
 	return metadataMB, contentMB
 }
 
+// getCacheCapacityBytes returns the effective cache capacity in bytes.
+// Returns the configured capacity, or the default 8Gi if not specified.
+// This is used to pass the limit to entry.sh for cache exhaustion detection.
+func (m *Mover) getCacheCapacityBytes() int64 {
+	if m.cacheCapacity != nil {
+		return m.cacheCapacity.Value()
+	}
+	// Default EmptyDir limit is 8Gi (matches configureCacheVolume default)
+	defaultLimit := resource.MustParse("8Gi")
+	return defaultLimit.Value()
+}
+
 func (m *Mover) validateRepository(ctx context.Context) (*corev1.Secret, error) {
 	// Validate mover volumes if specified
 	if err := utils.ValidateMoverVolumes(ctx, m.client, m.logger, m.owner.GetNamespace(),
@@ -1029,6 +1041,15 @@ func (m *Mover) addCacheLimitEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB",
 			Value: strconv.Itoa(int(*contentLimit)),
+		})
+	}
+
+	// Add cache capacity for monitoring (helps entry.sh detect cache exhaustion on eviction)
+	cacheCapacityBytes := m.getCacheCapacityBytes()
+	if cacheCapacityBytes > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_CACHE_CAPACITY_BYTES",
+			Value: strconv.FormatInt(cacheCapacityBytes, 10),
 		})
 	}
 
