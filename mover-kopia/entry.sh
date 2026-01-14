@@ -176,6 +176,19 @@ handle_sigterm() {
 # Install SIGTERM trap for cache exhaustion detection
 trap handle_sigterm SIGTERM
 
+# Run a command with progress output formatting
+# Converts carriage returns to newlines so progress appears line-by-line in logs
+# Usage: run_with_progress_output command [args...]
+# Returns: exit code of the command
+run_with_progress_output() {
+    # Pipe output through tr to convert \r to \n
+    # This ensures each progress update appears on its own line in kubectl logs
+    # The 2>&1 merges stderr into stdout so both get the same treatment
+    # Note: tr is more portable than stdbuf which may not be in minimal images
+    "$@" 2>&1 | tr '\r' '\n'
+    return "${PIPESTATUS[0]}"
+}
+
 log_info "VolSync kopia container version: ${version:-unknown}"
 log_info "Arguments: $@"
 echo
@@ -1880,15 +1893,15 @@ function do_backup {
         fi
     fi
     
-    # Create snapshot with error handling - ensure real-time progress output
-    # Execute with explicit file descriptor handling to ensure real-time output
+    # Create snapshot with progress output formatting
+    # This converts carriage returns to newlines so progress appears line-by-line in logs
     log_info "Creating snapshot for ${KOPIA_OVERRIDE_USERNAME:-$(whoami)}@${KOPIA_OVERRIDE_HOSTNAME:-$(hostname)}:${KOPIA_SOURCE_PATH_OVERRIDE:-$DATA_DIR}"
     log_debug "Snapshot command: ${SNAPSHOT_CMD[*]}"
 
     local snapshot_start_time=$(date +%s)
     log_info "Starting kopia snapshot creation..."
 
-    if ! "${SNAPSHOT_CMD[@]}" </dev/null; then
+    if ! run_with_progress_output "${SNAPSHOT_CMD[@]}"; then
         local snapshot_end_time=$(date +%s)
         log_timing "Snapshot creation failed after $((snapshot_end_time - snapshot_start_time)) seconds"
         error 1 "Failed to create snapshot"
@@ -2258,12 +2271,13 @@ function do_restore {
     # Add additional arguments if specified
     add_additional_args RESTORE_CMD
     
-    # Execute the restore command
+    # Execute the restore command with progress output formatting
+    # This converts carriage returns to newlines so progress appears line-by-line
     log_info "Executing restore command..."
     log_debug "Restore command: ${RESTORE_CMD[*]}"
 
     local restore_exec_start=$(date +%s)
-    if ! "${RESTORE_CMD[@]}"; then
+    if ! run_with_progress_output "${RESTORE_CMD[@]}"; then
         local restore_exec_end=$(date +%s)
         log_timing "Restore execution failed after $((restore_exec_end - restore_exec_start)) seconds"
 
