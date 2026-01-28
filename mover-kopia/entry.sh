@@ -54,6 +54,12 @@ echo
 
 set -e -o pipefail
 
+# Global state for exit trap
+OPERATION_RESULT="UNKNOWN"
+OPERATION_FAILURE_REASON=""
+KOPIA_ERROR_OUTPUT=""
+MAINTENANCE_DURATION=""
+
 # Function to log with structured prefixes and respect log level
 log_info() {
     echo "INFO: $*"
@@ -165,16 +171,84 @@ handle_sigterm() {
 
     # Check if this might be due to cache exhaustion
     if check_cache_exhaustion; then
+        # Set global state for EXIT trap summary
+        OPERATION_RESULT="FAILURE"
+        OPERATION_FAILURE_REASON="Pod terminated due to cache exhaustion (SIGTERM)"
         # Exit with a distinct code to indicate cache exhaustion
         exit 137
     fi
 
+    # Set state for non-cache-exhaustion termination
+    OPERATION_RESULT="FAILURE"
+    OPERATION_FAILURE_REASON="Pod terminated (SIGTERM)"
     echo "Pod termination not due to cache exhaustion"
     exit "${exit_code}"
 }
 
 # Install SIGTERM trap for cache exhaustion detection
 trap handle_sigterm SIGTERM
+
+# Output operation summary for consistent logging
+output_operation_summary() {
+    local exit_code=${1:-0}
+    local maint_duration=${MAINTENANCE_DURATION:-0}
+
+    log_info "=== OPERATION SUMMARY ==="
+    log_info "OPERATION_TYPE: ${DIRECTION:-unknown}"
+    log_info "OPERATION_RESULT: ${OPERATION_RESULT}"
+
+    if [[ "${DIRECTION}" == "maintenance" ]]; then
+        if [[ "${OPERATION_RESULT}" == "SUCCESS" ]]; then
+            log_info "MAINTENANCE_STATUS: SUCCESS"
+            log_info "MAINTENANCE_DURATION: ${maint_duration}"
+        else
+            log_info "MAINTENANCE_STATUS: FAILURE"
+            if [[ -n "${OPERATION_FAILURE_REASON}" ]]; then
+                log_info "MAINTENANCE_FAILURE_REASON: ${OPERATION_FAILURE_REASON}"
+            fi
+            if [[ -n "${KOPIA_ERROR_OUTPUT}" ]]; then
+                log_info "KOPIA_ERROR_OUTPUT_START:"
+                # Output each line with INFO prefix
+                while IFS= read -r line; do
+                    log_info "  ${line}"
+                done <<< "${KOPIA_ERROR_OUTPUT}"
+                log_info "KOPIA_ERROR_OUTPUT_END"
+            fi
+            # Include cache diagnostics on failure
+            log_info "=== Diagnostic Information ==="
+            local usage_info
+            usage_info=$(get_cache_usage)
+            local used_bytes=$(echo "${usage_info}" | awk '{print $1}')
+            local capacity_bytes=$(echo "${usage_info}" | awk '{print $2}')
+            local percentage=$(echo "${usage_info}" | awk '{print $3}')
+            log_info "CACHE_USAGE_BYTES: ${used_bytes}"
+            log_info "CACHE_CAPACITY_BYTES: ${capacity_bytes}"
+            log_info "CACHE_USAGE_PERCENT: ${percentage}"
+            if [[ ${percentage} -ge 90 ]]; then
+                log_warn "CACHE_EXHAUSTION_WARNING: Cache usage at ${percentage}%"
+            fi
+        fi
+    fi
+
+    log_info "EXIT_CODE: ${exit_code}"
+    log_info "=== Done ==="
+}
+
+# EXIT trap handler for consistent cleanup and summary output
+handle_exit() {
+    local exit_code=$?
+
+    # If result wasn't set, it's an unexpected failure
+    if [[ "${OPERATION_RESULT}" == "UNKNOWN" ]]; then
+        OPERATION_RESULT="FAILURE"
+        OPERATION_FAILURE_REASON="${OPERATION_FAILURE_REASON:-Unexpected exit with code ${exit_code}}"
+    fi
+
+    output_operation_summary "${exit_code}"
+}
+
+# Install EXIT trap for summary output
+trap handle_exit EXIT
 
 # Run a command with progress output formatting
 # Converts carriage returns to newlines so progress appears line-by-line in logs
@@ -2006,9 +2080,9 @@ function do_maintenance {
 
     # Ensure we have maintenance ownership
     if ! ensure_maintenance_ownership; then
-        log_error "Could not establish maintenance ownership"
-        log_error "Another process/user owns maintenance for this repository"
-        # For KopiaMaintenance CRD, we should fail to let the CronJob retry later
+        OPERATION_FAILURE_REASON="Could not establish maintenance ownership - another process/user owns maintenance for this repository"
+        OPERATION_RESULT="FAILURE"
+        log_error "${OPERATION_FAILURE_REASON}"
         return 1
     fi
 
@@ -2020,27 +2094,36 @@ function do_maintenance {
 
     # Run quick maintenance cycle first (handles index compaction)
     log_info "Running Kopia quick maintenance..."
-    if ! "${KOPIA[@]}" maintenance run 2>&1; then
-        log_warn "Quick maintenance failed, continuing with full maintenance..."
+    local quick_maint_output
+    local quick_exit_code=0
+    quick_maint_output=$("${KOPIA[@]}" maintenance run 2>&1) || quick_exit_code=$?
+    echo "${quick_maint_output}"
+
+    if [[ ${quick_exit_code} -ne 0 ]]; then
+        log_warn "Quick maintenance failed (exit code ${quick_exit_code}), continuing with full maintenance..."
     fi
 
     # Run full maintenance cycle
     log_info "Running Kopia full maintenance..."
+    local full_maint_output
     local maint_exit_code=0
-    if ! "${KOPIA[@]}" maintenance run --full 2>&1; then
-        maint_exit_code=$?
-        log_error "Maintenance operation failed with exit code: ${maint_exit_code}"
-        # Return failure for CronJob retry logic
+    full_maint_output=$("${KOPIA[@]}" maintenance run --full 2>&1) || maint_exit_code=$?
+    echo "${full_maint_output}"
+
+    if [[ ${maint_exit_code} -ne 0 ]]; then
+        KOPIA_ERROR_OUTPUT="${full_maint_output}"
+        OPERATION_FAILURE_REASON="Kopia maintenance run --full failed with exit code ${maint_exit_code}"
+        OPERATION_RESULT="FAILURE"
+        log_error "${OPERATION_FAILURE_REASON}"
         return ${maint_exit_code}
     fi
 
     local maint_end_time=$(date +%s)
-    local maint_duration=$((maint_end_time - maint_start_time))
-    log_info "Maintenance operation completed successfully in ${maint_duration} seconds"
+    MAINTENANCE_DURATION=$((maint_end_time - maint_start_time))
+    log_info "Maintenance operation completed successfully in ${MAINTENANCE_DURATION} seconds"
 
-    # Log success for monitoring
-    log_info "MAINTENANCE_STATUS: SUCCESS"
-    log_info "MAINTENANCE_DURATION: ${maint_duration}"
+    # Set success state
+    OPERATION_RESULT="SUCCESS"
 
     return 0
 }
@@ -2385,18 +2468,3 @@ else
         esac
     done
 fi
-
-OPERATION_END_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-OPERATION_DURATION=$(( SECONDS - START_TIME ))
-
-log_timing "Total kopia operation completed in ${OPERATION_DURATION}s"
-log_info "Operation end time: ${OPERATION_END_TIMESTAMP}"
-
-# Log operation summary for monitoring
-log_info "=== OPERATION SUMMARY ==="
-log_info "OPERATION_TYPE: ${DIRECTION:-command-based}"
-log_info "OPERATION_START: ${OPERATION_START_TIMESTAMP}"
-log_info "OPERATION_END: ${OPERATION_END_TIMESTAMP}"
-log_info "OPERATION_DURATION_SECONDS: ${OPERATION_DURATION}"
-log_info "=== Operation finished ==="
-log_info "=== Done ==="
