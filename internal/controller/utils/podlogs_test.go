@@ -300,6 +300,139 @@ var _ = Describe("Tail lines env var test", func() {
 	})
 })
 
+var _ = Describe("Filter Logs with Long Lines Tests", func() {
+	logger := zap.New(zap.UseDevMode(true), zap.WriteTo(GinkgoWriter))
+
+	Context("When log lines exceed default scanner buffer size", func() {
+		It("Should handle lines larger than 64KB with increased buffer size", func() {
+			// Create a log with a very long line (>64KB)
+			longLine := strings.Repeat("A", 100000) // 100KB line
+			testLog := "Short line 1\n" + longLine + "\nShort line 2"
+
+			reader := strings.NewReader(testLog)
+			filteredLines, err := utils.FilterLogs(reader, utils.AllLines)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Should successfully parse the log without bufio.Scanner: token too long error
+			Expect(filteredLines).To(ContainSubstring("Short line 1"))
+			Expect(filteredLines).To(ContainSubstring("Short line 2"))
+			Expect(filteredLines).To(ContainSubstring(longLine))
+			logger.Info("Successfully parsed log with long line",
+				"longLineLength", len(longLine),
+				"resultLength", len(filteredLines))
+		})
+
+		It("Should handle multiple long lines", func() {
+			// Create a log with multiple long lines
+			longLine1 := strings.Repeat("B", 80000) // 80KB
+			longLine2 := strings.Repeat("C", 90000) // 90KB
+			longLine3 := strings.Repeat("D", 70000) // 70KB
+			testLog := longLine1 + "\n" + longLine2 + "\n" + longLine3
+
+			reader := strings.NewReader(testLog)
+			filteredLines, err := utils.FilterLogs(reader, utils.AllLines)
+			Expect(err).NotTo(HaveOccurred())
+
+			// All lines should be present
+			Expect(filteredLines).To(ContainSubstring(longLine1))
+			Expect(filteredLines).To(ContainSubstring(longLine2))
+			Expect(filteredLines).To(ContainSubstring(longLine3))
+		})
+
+		It("Should filter long lines correctly", func() {
+			// Create a long line with a pattern we can filter on
+			longLineWithPattern := "ERROR: " + strings.Repeat("X", 70000) + " critical failure"
+			longLineWithoutPattern := strings.Repeat("Y", 70000) + " normal output"
+			testLog := longLineWithPattern + "\n" + longLineWithoutPattern
+
+			// Filter that only keeps lines containing "ERROR"
+			errorFilter := func(line string) *string {
+				if strings.Contains(line, "ERROR") {
+					return &line
+				}
+				return nil
+			}
+
+			reader := strings.NewReader(testLog)
+			filteredLines, err := utils.FilterLogs(reader, errorFilter)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(filteredLines).To(ContainSubstring(longLineWithPattern))
+			Expect(filteredLines).NotTo(ContainSubstring(longLineWithoutPattern))
+		})
+	})
+})
+
+var _ = Describe("Log Scanner Buffer Size Env Var Test", func() {
+	It("Should test the default value for the scanner buffer size env var", func() {
+		bufferSizeDefault := utils.GetMoverLogMaxScanBufferSize()
+		Expect(bufferSizeDefault).To(Equal(1024)) // 1024KB = 1MB default
+	})
+
+	When("The env var is set to a value", func() {
+		BeforeEach(func() {
+			os.Setenv(utils.MoverLogMaxScanBufferSizeEnvVar, "2048")
+		})
+		AfterEach(func() {
+			os.Unsetenv(utils.MoverLogMaxScanBufferSizeEnvVar)
+		})
+
+		It("Should use the value provided and convert to int", func() {
+			bufferSize := utils.GetMoverLogMaxScanBufferSize()
+			Expect(bufferSize).To(Equal(2048))
+		})
+	})
+
+	When("The env var is set to a small value", func() {
+		BeforeEach(func() {
+			os.Setenv(utils.MoverLogMaxScanBufferSizeEnvVar, "128")
+		})
+		AfterEach(func() {
+			os.Unsetenv(utils.MoverLogMaxScanBufferSizeEnvVar)
+		})
+
+		It("Should use the smaller buffer size", func() {
+			bufferSize := utils.GetMoverLogMaxScanBufferSize()
+			Expect(bufferSize).To(Equal(128))
+		})
+	})
+})
+
+var _ = Describe("Log Fetch Timeout Env Var Test", func() {
+	It("Should test the default value for the log fetch timeout env var", func() {
+		timeoutDefault := utils.GetMoverLogFetchTimeout()
+		Expect(timeoutDefault).To(Equal(120 * time.Second))
+	})
+
+	When("The env var is set to a value", func() {
+		BeforeEach(func() {
+			os.Setenv(utils.MoverLogFetchTimeoutEnvVar, "300")
+		})
+		AfterEach(func() {
+			os.Unsetenv(utils.MoverLogFetchTimeoutEnvVar)
+		})
+
+		It("Should use the value provided and convert to time.Duration", func() {
+			timeout := utils.GetMoverLogFetchTimeout()
+			Expect(timeout).To(Equal(300 * time.Second))
+		})
+	})
+
+	When("The env var is set to a short timeout", func() {
+		BeforeEach(func() {
+			os.Setenv(utils.MoverLogFetchTimeoutEnvVar, "30")
+		})
+		AfterEach(func() {
+			os.Unsetenv(utils.MoverLogFetchTimeoutEnvVar)
+		})
+
+		It("Should use the shorter timeout", func() {
+			timeout := utils.GetMoverLogFetchTimeout()
+			Expect(timeout).To(Equal(30 * time.Second))
+		})
+	})
+})
+
 func testFilterFunc(line string) *string {
 	// Return all lines that start with "Created " or "created " or lines that have "=== * ==="
 	var myRegex = regexp.MustCompile(`^\s*([cC]reated)\s.+|^\s*(===)\s.+(===)`)
