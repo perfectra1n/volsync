@@ -131,6 +131,8 @@ type RepositoryConfig struct {
 	Namespace string `json:"-"`
 	// Schedule for maintenance (not included in hash)
 	Schedule string `json:"-"`
+	// CacheCapacity for the cache emptyDir volume (not included in hash)
+	CacheCapacity *resource.Quantity `json:"-"`
 }
 
 // Hash generates a deterministic hash for the repository configuration
@@ -195,10 +197,11 @@ func (m *MaintenanceManager) ReconcileMaintenanceForSource(ctx context.Context,
 
 	// Create repository config
 	repoConfig := &RepositoryConfig{
-		Repository: source.Spec.Kopia.Repository,
-		CustomCA:   (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
-		Namespace:  source.Namespace,
-		Schedule:   m.getMaintenanceSchedule(source),
+		Repository:    source.Spec.Kopia.Repository,
+		CustomCA:      (*volsyncv1alpha1.CustomCASpec)(&source.Spec.Kopia.CustomCA),
+		Namespace:     source.Namespace,
+		Schedule:      m.getMaintenanceSchedule(source),
+		CacheCapacity: source.Spec.Kopia.CacheCapacity,
 	}
 
 	// Ensure maintenance CronJob exists
@@ -828,6 +831,34 @@ func (m *MaintenanceManager) buildMaintenanceEnvVars(repoConfig *RepositoryConfi
 		})
 	}
 
+	// Auto-calculate cache limits from effective cache capacity (70% metadata, 20% content)
+	// Matches the behavior of the mover and KopiaMaintenance CRD controller
+	effectiveCapacity := repoConfig.CacheCapacity
+	if effectiveCapacity == nil {
+		defaultCapacity := resource.MustParse("8Gi")
+		effectiveCapacity = &defaultCapacity
+	}
+	capacityBytes := effectiveCapacity.Value()
+	capacityMB := capacityBytes / (1024 * 1024)
+	metadataMB := int32(float64(capacityMB) * 0.70)
+	contentMB := int32(float64(capacityMB) * 0.20)
+	if metadataMB > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_METADATA_CACHE_SIZE_LIMIT_MB",
+			Value: strconv.Itoa(int(metadataMB)),
+		})
+	}
+	if contentMB > 0 {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB",
+			Value: strconv.Itoa(int(contentMB)),
+		})
+	}
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "KOPIA_CACHE_CAPACITY_BYTES",
+		Value: strconv.FormatInt(capacityBytes, 10),
+	})
+
 	return envVars
 }
 
@@ -837,12 +868,17 @@ func (m *MaintenanceManager) buildMaintenanceVolumes(repoConfig *RepositoryConfi
 	var volumeMounts []corev1.VolumeMount
 
 	// Cache volume (emptyDir for maintenance jobs with size limit)
+	emptyDirSource := &corev1.EmptyDirVolumeSource{}
+	if repoConfig.CacheCapacity != nil {
+		emptyDirSource.SizeLimit = repoConfig.CacheCapacity
+	} else {
+		defaultLimit := resource.MustParse("8Gi")
+		emptyDirSource.SizeLimit = &defaultLimit
+	}
 	volumes = append(volumes, corev1.Volume{
 		Name: kopiaCache,
 		VolumeSource: corev1.VolumeSource{
-			EmptyDir: &corev1.EmptyDirVolumeSource{
-				SizeLimit: resource.NewQuantity(1*1024*1024*1024, resource.BinarySI), // 1Gi limit
-			},
+			EmptyDir: emptyDirSource,
 		},
 	})
 	volumeMounts = append(volumeMounts, corev1.VolumeMount{

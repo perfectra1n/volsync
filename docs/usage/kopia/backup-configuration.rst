@@ -36,17 +36,43 @@ There are a number of configuration options available for customizing backup beh
 cacheCapacity
    This determines the size of the Kopia metadata cache volume. This volume
    contains cached metadata from the backup repository. It must be large enough
-   to hold the repository metadata. The default is ``1 Gi``.
+   to hold the repository metadata.
+
+   **Cache Volume Behavior:**
+
+   The cache storage strategy depends on which fields you configure:
+
+   - **No cache fields set** (default): An EmptyDir volume is used with an ``8Gi``
+     size limit. This is the simplest option and works well for most use cases.
+   - **Only cacheCapacity set**: An EmptyDir volume is used with the specified size
+     limit. Use this to increase (or decrease) the cache size without provisioning a PVC.
+   - **cacheStorageClassName or cacheAccessModes set**: A PersistentVolumeClaim is
+     created. The PVC capacity defaults to ``1Gi`` but can be overridden with
+     ``cacheCapacity``.
+
+   .. code-block:: yaml
+
+      # Example: EmptyDir with custom size (no PVC created)
+      kopia:
+        repository: kopia-config
+        cacheCapacity: 16Gi
+
+      # Example: PVC-backed cache
+      kopia:
+        repository: kopia-config
+        cacheCapacity: 16Gi
+        cacheStorageClassName: fast-ssd
 
 cacheStorageClassName
    This is the name of the StorageClass that should be used when provisioning
    the cache volume. It defaults to ``.spec.storageClassName``, then to the name
-   of the StorageClass used by the source PVC.
+   of the StorageClass used by the source PVC. Setting this field triggers PVC-based
+   caching instead of EmptyDir.
 
 cacheAccessModes
    This is the access mode(s) that should be used to provision the cache volume.
    It defaults to ``.spec.accessModes``, then to the access modes used by the
-   source PVC.
+   source PVC. Setting this field triggers PVC-based caching instead of EmptyDir.
 
 customCA
    This option allows a custom certificate authority to be used when making TLS

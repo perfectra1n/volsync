@@ -2426,11 +2426,13 @@ if [[ "${DIRECTION}" == "source" ]]; then
     do_backup
     do_retention
     # Maintenance is now handled by the KopiaMaintenance CRD, not during backups
+    OPERATION_RESULT="SUCCESS"
 elif [[ "${DIRECTION}" == "destination" ]]; then
     log_info "=== Running as DESTINATION ===="
     ensure_connected
     do_restore
     sync -f "${DATA_DIR}"
+    OPERATION_RESULT="SUCCESS"
 elif [[ "${DIRECTION}" == "maintenance" ]]; then
     log_info "=== Running MAINTENANCE ONLY ===="
     # Maintenance mode for KopiaMaintenance CRD
@@ -2467,4 +2469,5 @@ else
                 ;;
         esac
     done
+    OPERATION_RESULT="SUCCESS"
 fi

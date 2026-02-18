@@ -29,6 +29,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -237,5 +238,124 @@ var _ = Describe("MaintenanceManager", func() {
 		})
 	})
 
-	// NOTE: SecurityContextAndResourceLimits test removed - maintenance is now managed by KopiaMaintenance CRD
+	Describe("buildMaintenanceVolumes", func() {
+		var manager *MaintenanceManager
+
+		BeforeEach(func() {
+			client := fake.NewClientBuilder().WithScheme(scheme).Build()
+			logger := logr.Discard()
+			manager = NewMaintenanceManager(client, logger, "test-image:latest", nil)
+		})
+
+		It("should default cache volume size to 8Gi when CacheCapacity is nil", func() {
+			repoConfig := &RepositoryConfig{
+				Repository: "repo1",
+				Namespace:  "ns1",
+			}
+
+			volumes, volumeMounts := manager.buildMaintenanceVolumes(repoConfig)
+
+			// Find the cache volume
+			var cacheVolume *corev1.Volume
+			for i := range volumes {
+				if volumes[i].Name == kopiaCache {
+					cacheVolume = &volumes[i]
+					break
+				}
+			}
+			Expect(cacheVolume).NotTo(BeNil())
+			Expect(cacheVolume.VolumeSource.EmptyDir).NotTo(BeNil())
+
+			expectedSize := resource.MustParse("8Gi")
+			Expect(cacheVolume.VolumeSource.EmptyDir.SizeLimit.Cmp(expectedSize)).To(Equal(0))
+
+			// Verify cache mount exists
+			var cacheMount *corev1.VolumeMount
+			for i := range volumeMounts {
+				if volumeMounts[i].Name == kopiaCache {
+					cacheMount = &volumeMounts[i]
+					break
+				}
+			}
+			Expect(cacheMount).NotTo(BeNil())
+			Expect(cacheMount.MountPath).To(Equal(kopiaCacheMountPath))
+		})
+
+		It("should use custom CacheCapacity when specified", func() {
+			customSize := resource.MustParse("4Gi")
+			repoConfig := &RepositoryConfig{
+				Repository:    "repo1",
+				Namespace:     "ns1",
+				CacheCapacity: &customSize,
+			}
+
+			volumes, _ := manager.buildMaintenanceVolumes(repoConfig)
+
+			// Find the cache volume
+			var cacheVolume *corev1.Volume
+			for i := range volumes {
+				if volumes[i].Name == kopiaCache {
+					cacheVolume = &volumes[i]
+					break
+				}
+			}
+			Expect(cacheVolume).NotTo(BeNil())
+			Expect(cacheVolume.VolumeSource.EmptyDir).NotTo(BeNil())
+			Expect(cacheVolume.VolumeSource.EmptyDir.SizeLimit.Cmp(customSize)).To(Equal(0))
+		})
+	})
+
+	Describe("buildMaintenanceEnvVars", func() {
+		var manager *MaintenanceManager
+
+		BeforeEach(func() {
+			client := fake.NewClientBuilder().WithScheme(scheme).Build()
+			logger := logr.Discard()
+			manager = NewMaintenanceManager(client, logger, "test-image:latest", nil)
+		})
+
+		It("should auto-calculate cache limits from default 8Gi capacity", func() {
+			repoConfig := &RepositoryConfig{
+				Repository: "repo1",
+				Namespace:  "ns1",
+			}
+
+			envVars := manager.buildMaintenanceEnvVars(repoConfig)
+			envMap := make(map[string]string)
+			for _, env := range envVars {
+				envMap[env.Name] = env.Value
+			}
+
+			// 8Gi = 8192 MB -> metadata = 70% = 5734, content = 20% = 1638
+			Expect(envMap).To(HaveKey("KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"))
+			Expect(envMap["KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"]).To(Equal("5734"))
+			Expect(envMap).To(HaveKey("KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"))
+			Expect(envMap["KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"]).To(Equal("1638"))
+			Expect(envMap).To(HaveKey("KOPIA_CACHE_CAPACITY_BYTES"))
+			Expect(envMap["KOPIA_CACHE_CAPACITY_BYTES"]).To(Equal("8589934592")) // 8Gi in bytes
+		})
+
+		It("should auto-calculate cache limits from custom CacheCapacity", func() {
+			customSize := resource.MustParse("1Gi")
+			repoConfig := &RepositoryConfig{
+				Repository:    "repo1",
+				Namespace:     "ns1",
+				CacheCapacity: &customSize,
+			}
+
+			envVars := manager.buildMaintenanceEnvVars(repoConfig)
+			envMap := make(map[string]string)
+			for _, env := range envVars {
+				envMap[env.Name] = env.Value
+			}
+
+			// 1Gi = 1024 MB -> metadata = 70% = 716, content = 20% = 204
+			Expect(envMap).To(HaveKey("KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"))
+			Expect(envMap["KOPIA_METADATA_CACHE_SIZE_LIMIT_MB"]).To(Equal("716"))
+			Expect(envMap).To(HaveKey("KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"))
+			Expect(envMap["KOPIA_CONTENT_CACHE_SIZE_LIMIT_MB"]).To(Equal("204"))
+			Expect(envMap).To(HaveKey("KOPIA_CACHE_CAPACITY_BYTES"))
+			Expect(envMap["KOPIA_CACHE_CAPACITY_BYTES"]).To(Equal("1073741824")) // 1Gi in bytes
+		})
+	})
 })

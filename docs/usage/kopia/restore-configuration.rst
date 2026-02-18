@@ -1181,34 +1181,46 @@ example.
 cacheCapacity
    This determines the size of the Kopia metadata cache volume. This volume
    contains cached metadata from the backup repository. It must be large enough
-   to hold the repository metadata. The default is ``1 Gi``.
+   to hold the repository metadata.
 
    **Cache Volume Behavior:**
 
-   - **When specified**: A PersistentVolumeClaim is created with the specified capacity
-   - **When not specified**: An EmptyDir volume is used as fallback, providing temporary cache storage
+   The cache storage strategy depends on which fields you configure:
 
-   .. important::
-      With EmptyDir fallback, cache contents are lost when the pod restarts, which may
-      impact performance for subsequent restore operations as the cache needs to be rebuilt.
+   - **No cache fields set** (default): An EmptyDir volume is used with an ``8Gi``
+     size limit. This is the simplest option and works well for most use cases.
+     Cache contents are lost when the pod terminates.
+   - **Only cacheCapacity set**: An EmptyDir volume is used with the specified size
+     limit. Use this to increase (or decrease) the cache size without provisioning a PVC.
+   - **cacheStorageClassName or cacheAccessModes set**: A PersistentVolumeClaim is
+     created. The PVC capacity defaults to ``1Gi`` but can be overridden with
+     ``cacheCapacity``. The PVC persists cache data across pod restarts.
+
+   .. code-block:: yaml
+
+      # Example: EmptyDir with custom size (no PVC created)
+      kopia:
+        repository: kopia-config
+        cacheCapacity: 16Gi
+        destinationPVC: restored-data
+
+      # Example: PVC-backed cache (persists across restarts)
+      kopia:
+        repository: kopia-config
+        cacheCapacity: 16Gi
+        cacheStorageClassName: fast-ssd
+        destinationPVC: restored-data
 
 cacheStorageClassName
    This is the name of the StorageClass that should be used when provisioning
    the cache volume. It defaults to ``.spec.storageClassName``, then to the name
-   of the StorageClass used by the source PVC.
-
-   .. note::
-      This setting only applies when ``cacheCapacity`` is specified. EmptyDir volumes
-      do not use StorageClasses.
+   of the StorageClass used by the source PVC. Setting this field triggers PVC-based
+   caching instead of EmptyDir.
 
 cacheAccessModes
    This is the access mode(s) that should be used to provision the cache volume.
    It defaults to ``.spec.accessModes``, then to the access modes used by the
-   source PVC.
-
-   .. note::
-      This setting only applies when ``cacheCapacity`` is specified. EmptyDir volumes
-      do not use access modes.
+   source PVC. Setting this field triggers PVC-based caching instead of EmptyDir.
 
 cleanupCachePVC
    This optional boolean determines if the cache PVC should be cleaned up at
