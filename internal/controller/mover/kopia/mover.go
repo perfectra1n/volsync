@@ -1404,24 +1404,40 @@ func (m *Mover) configureSecurityContext(podSpec *corev1.PodSpec) {
 // handleJobStatus handles job status checking and completion logic
 func (m *Mover) handleJobStatus(ctx context.Context, job *batchv1.Job,
 	logger logr.Logger, err error) (*batchv1.Job, error) {
-	// Record job retries if there are failures
-	if job.Status.Failed > 0 && job.Status.Failed < *job.Spec.BackoffLimit {
-		operation := operationBackup
-		if !m.isSource {
-			operation = "restore"
+	operation := operationBackup
+	if !m.isSource {
+		operation = "restore"
+	}
+
+	// Determine terminal state from job conditions
+	var failedCondition *batchv1.JobCondition
+	jobComplete := false
+	for _, condition := range job.Status.Conditions {
+		if condition.Status != corev1.ConditionTrue {
+			continue
 		}
+		switch condition.Type {
+		case batchv1.JobFailed:
+			failedCondition = &condition
+		case batchv1.JobComplete:
+			jobComplete = true
+		}
+	}
+
+	// Record retry metrics for pod-level failures while the job is still running
+	if !jobComplete && job.Status.Failed > 0 {
 		m.recordJobRetry(operation, "job_pod_failure")
 	}
 
 	// If Job had failed, delete it so it can be recreated
-	if job.Status.Failed >= *job.Spec.BackoffLimit {
+	if failedCondition != nil {
 		// Record failure metrics before deleting the job
 		// This ensures metrics are properly captured even if the job is recreated
-		operation := operationBackup
-		if !m.isSource {
-			operation = "restore"
+		failureReason := "job_failed"
+		if failedCondition.Reason != "" {
+			failureReason = failedCondition.Reason
 		}
-		m.recordOperationFailure(operation, "job_backoff_limit_exceeded")
+		m.recordOperationFailure(operation, failureReason)
 
 		// Update status with mover logs from failed job using Kopia-specific filter
 		logFilter := utils.AllLines
@@ -1437,7 +1453,7 @@ func (m *Mover) handleJobStatus(ctx context.Context, job *batchv1.Job,
 			m.updateDestinationDiscoveryStatus()
 		}
 
-		logger.Info("deleting job -- backoff limit reached")
+		logger.Info("deleting job -- terminal failure", "reason", failureReason)
 		err = m.client.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 		return nil, err
 	}
@@ -1447,7 +1463,7 @@ func (m *Mover) handleJobStatus(ctx context.Context, job *batchv1.Job,
 	}
 
 	// Stop here if the job hasn't completed yet
-	if job.Status.Succeeded == 0 {
+	if !jobComplete {
 		return nil, nil
 	}
 
@@ -1542,8 +1558,22 @@ func (m *Mover) setupPrerequisites(ctx context.Context) (*corev1.PersistentVolum
 // handleJobCompletion processes job status and handles completion logic
 func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 	dataPVC *corev1.PersistentVolumeClaim) (mover.Result, error) {
-	// Job handling - check for completion or failure
-	if job.Status.Failed > 0 {
+	// Determine terminal state from job conditions
+	jobComplete := false
+	jobFailed := false
+	for _, condition := range job.Status.Conditions {
+		if condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch condition.Type {
+		case batchv1.JobComplete:
+			jobComplete = true
+		case batchv1.JobFailed:
+			jobFailed = true
+		}
+	}
+
+	if jobFailed {
 		// For destination jobs, parse logs for discovery information
 		if !m.isSource && m.destinationStatus != nil {
 			m.updateDestinationDiscoveryStatus()
@@ -1554,7 +1584,7 @@ func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 	}
 
 	// Stop here if the job hasn't completed yet
-	if job.Status.Succeeded == 0 {
+	if !jobComplete {
 		return mover.InProgress(), nil
 	}
 
