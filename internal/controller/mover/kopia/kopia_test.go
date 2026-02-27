@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/viper"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1137,6 +1138,78 @@ var _ = Describe("Kopia", func() {
 
 			// This test documents the expected behavior when a job definitively fails
 			Expect(mover).NotTo(BeNil()) // Ensure mover is properly initialized
+		})
+	})
+
+	Context("jobTerminalState", func() {
+		It("should report not terminal when job has no conditions", func() {
+			job := &batchv1.Job{}
+			complete, failed := jobTerminalState(job)
+			Expect(complete).To(BeFalse())
+			Expect(failed).To(BeNil())
+		})
+
+		It("should report not terminal when conditions are not True", func() {
+			job := &batchv1.Job{
+				Status: batchv1.JobStatus{
+					Conditions: []batchv1.JobCondition{
+						{Type: batchv1.JobComplete, Status: corev1.ConditionFalse},
+						{Type: batchv1.JobFailed, Status: corev1.ConditionFalse},
+					},
+				},
+			}
+			complete, failed := jobTerminalState(job)
+			Expect(complete).To(BeFalse())
+			Expect(failed).To(BeNil())
+		})
+
+		It("should detect a completed job", func() {
+			job := &batchv1.Job{
+				Status: batchv1.JobStatus{
+					Conditions: []batchv1.JobCondition{
+						{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			complete, failed := jobTerminalState(job)
+			Expect(complete).To(BeTrue())
+			Expect(failed).To(BeNil())
+		})
+
+		It("should detect a failed job and return its condition", func() {
+			job := &batchv1.Job{
+				Status: batchv1.JobStatus{
+					Conditions: []batchv1.JobCondition{
+						{
+							Type:   batchv1.JobFailed,
+							Status: corev1.ConditionTrue,
+							Reason: "BackoffLimitExceeded",
+						},
+					},
+				},
+			}
+			complete, failed := jobTerminalState(job)
+			Expect(complete).To(BeFalse())
+			Expect(failed).NotTo(BeNil())
+			Expect(failed.Reason).To(Equal("BackoffLimitExceeded"))
+		})
+
+		It("should detect a completed job even with failed pods (regression test for PR #27)", func() {
+			// This is the core scenario: a job that had pod failures but ultimately
+			// completed successfully. The old code checked Status.Failed > 0 and would
+			// incorrectly treat this as a failure or in-progress state.
+			job := &batchv1.Job{
+				Status: batchv1.JobStatus{
+					Failed:    2,
+					Succeeded: 1,
+					Conditions: []batchv1.JobCondition{
+						{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			complete, failed := jobTerminalState(job)
+			Expect(complete).To(BeTrue())
+			Expect(failed).To(BeNil())
 		})
 	})
 })
