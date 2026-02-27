@@ -1401,6 +1401,24 @@ func (m *Mover) configureSecurityContext(podSpec *corev1.PodSpec) {
 	}
 }
 
+// jobTerminalState inspects a Job's conditions to determine whether it has
+// reached a terminal state (complete or failed). Returns the JobComplete flag
+// and, if the job failed, the corresponding JobFailed condition.
+func jobTerminalState(job *batchv1.Job) (complete bool, failed *batchv1.JobCondition) {
+	for _, condition := range job.Status.Conditions {
+		if condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch condition.Type {
+		case batchv1.JobComplete:
+			complete = true
+		case batchv1.JobFailed:
+			failed = &condition
+		}
+	}
+	return
+}
+
 // handleJobStatus handles job status checking and completion logic
 func (m *Mover) handleJobStatus(ctx context.Context, job *batchv1.Job,
 	logger logr.Logger, err error) (*batchv1.Job, error) {
@@ -1410,19 +1428,7 @@ func (m *Mover) handleJobStatus(ctx context.Context, job *batchv1.Job,
 	}
 
 	// Determine terminal state from job conditions
-	var failedCondition *batchv1.JobCondition
-	jobComplete := false
-	for _, condition := range job.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		switch condition.Type {
-		case batchv1.JobFailed:
-			failedCondition = &condition
-		case batchv1.JobComplete:
-			jobComplete = true
-		}
-	}
+	jobComplete, failedCondition := jobTerminalState(job)
 
 	// Record retry metrics for pod-level failures while the job is still running
 	if !jobComplete && job.Status.Failed > 0 {
@@ -1559,21 +1565,9 @@ func (m *Mover) setupPrerequisites(ctx context.Context) (*corev1.PersistentVolum
 func (m *Mover) handleJobCompletion(ctx context.Context, job *batchv1.Job,
 	dataPVC *corev1.PersistentVolumeClaim) (mover.Result, error) {
 	// Determine terminal state from job conditions
-	jobComplete := false
-	jobFailed := false
-	for _, condition := range job.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		switch condition.Type {
-		case batchv1.JobComplete:
-			jobComplete = true
-		case batchv1.JobFailed:
-			jobFailed = true
-		}
-	}
+	jobComplete, failedCondition := jobTerminalState(job)
 
-	if jobFailed {
+	if failedCondition != nil {
 		// For destination jobs, parse logs for discovery information
 		if !m.isSource && m.destinationStatus != nil {
 			m.updateDestinationDiscoveryStatus()
