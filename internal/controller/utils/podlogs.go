@@ -23,6 +23,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/viper"
@@ -46,6 +47,15 @@ const (
 
 	// Env var - Set to "true" to log all lines (up to MOVER_LOG_MAX_LINES) of mover logs
 	MoverLogDebugEnvVar = "MOVER_LOG_DEBUG"
+
+	// Env var - max buffer size for log scanner (in KB) to handle long log lines
+	// Default is 1024KB = 1MB buffer
+	MoverLogMaxScanBufferSizeEnvVar      = "MOVER_LOG_MAX_SCAN_BUFFER_SIZE"
+	DefaultMoverLogMaxScanBufferSize int = 1024 // KB
+
+	// Env var - log fetch timeout in seconds
+	MoverLogFetchTimeoutEnvVar      = "MOVER_LOG_FETCH_TIMEOUT"
+	DefaultMoverLogFetchTimeout int = 120
 )
 
 //+kubebuilder:rbac:groups=core,resources=pods/log,verbs=get;list;watch
@@ -86,6 +96,22 @@ func InitPodLogsClient(cfg *rest.Config) (*kubernetes.Clientset, error) {
 		return nil, err
 	}
 
+	// Allow env var to override MOVER_LOG_MAX_SCAN_BUFFER_SIZE
+	// This controls the max buffer size for the log scanner to handle long log lines.
+	viper.SetDefault(MoverLogMaxScanBufferSizeEnvVar, DefaultMoverLogMaxScanBufferSize)
+	err = viper.BindEnv(MoverLogMaxScanBufferSizeEnvVar)
+	if err != nil {
+		return nil, err
+	}
+
+	// Allow env var to override MOVER_LOG_FETCH_TIMEOUT
+	// This controls how long to wait when fetching pod logs.
+	viper.SetDefault(MoverLogFetchTimeoutEnvVar, DefaultMoverLogFetchTimeout)
+	err = viper.BindEnv(MoverLogFetchTimeoutEnvVar)
+	if err != nil {
+		return nil, err
+	}
+
 	clientset, err = kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -104,6 +130,14 @@ func GetMoverLogMaxBytes() int {
 
 func IsMoverLogDebug() bool {
 	return viper.GetBool(MoverLogDebugEnvVar)
+}
+
+func GetMoverLogMaxScanBufferSize() int {
+	return viper.GetInt(MoverLogMaxScanBufferSizeEnvVar)
+}
+
+func GetMoverLogFetchTimeout() time.Duration {
+	return time.Duration(viper.GetInt(MoverLogFetchTimeoutEnvVar)) * time.Second
 }
 
 func getPodLogs(ctx context.Context, logger logr.Logger, podName, podNamespace string,
@@ -139,6 +173,15 @@ func FilterLogs(reader io.Reader, lineFilter func(line string) *string) (string,
 	}
 
 	lineScanner := bufio.NewScanner(reader)
+
+	// Increase scanner buffer size to handle long log lines
+	// Get buffer size in bytes (config is in KB)
+	bufferSize := GetMoverLogMaxScanBufferSize() * 1024
+	if bufferSize > 0 {
+		buf := make([]byte, 0, bufferSize)
+		lineScanner.Buffer(buf, bufferSize)
+	}
+
 	var allLines strings.Builder
 	for lineScanner.Scan() {
 		// Run lineFilter() func to see if the line should be appended
@@ -202,7 +245,11 @@ func updateMoverStatusForJob(ctx context.Context, logger logr.Logger, moverStatu
 	}
 
 	l.Info("Getting logs for pod", "podName", pod.GetName(), "pod", pod)
-	filteredLogs, err := getPodLogs(ctx, l, pod.GetName(), jobNamespace, logLineFilter)
+
+	// Create a timeout context for log fetching to prevent hanging
+	logCtx, cancel := context.WithTimeout(ctx, GetMoverLogFetchTimeout())
+	defer cancel()
+	filteredLogs, err := getPodLogs(logCtx, l, pod.GetName(), jobNamespace, logLineFilter)
 	if err != nil {
 		l.Error(err, "Error getting logs from pod")
 	}
