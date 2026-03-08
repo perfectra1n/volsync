@@ -822,8 +822,8 @@ var _ = Describe("utils tests", func() {
 					specVolumeMounts := podTemplateSpec.Spec.Containers[0].VolumeMounts
 					specVolumes := podTemplateSpec.Spec.Volumes
 
-					Expect(len(specVolumeMounts)).To(Equal(2))
-					Expect(len(specVolumes)).To(Equal(2))
+					Expect(specVolumeMounts).To(HaveLen(2))
+					Expect(specVolumes).To(HaveLen(2))
 
 					Expect(specVolumeMounts[0]).To(Equal(origVolumeMount))
 					Expect(specVolumes[0]).To(Equal(origVolume))
@@ -861,8 +861,8 @@ var _ = Describe("utils tests", func() {
 						specVolumeMounts := podTemplateSpec.Spec.Containers[0].VolumeMounts
 						specVolumes := podTemplateSpec.Spec.Volumes
 
-						Expect(len(specVolumeMounts)).To(Equal(2))
-						Expect(len(specVolumes)).To(Equal(2))
+						Expect(specVolumeMounts).To(HaveLen(2))
+						Expect(specVolumes).To(HaveLen(2))
 
 						Expect(specVolumeMounts[0]).To(Equal(origVolumeMount))
 						Expect(specVolumes[0]).To(Equal(origVolume))
@@ -886,7 +886,7 @@ var _ = Describe("utils tests", func() {
 
 			// nolint:dupl // Same as above, but for a secret
 			When("moverVolumes has a volume source that is a secret", func() {
-				It("should mount them all in the pod template spec", func() {
+				It("should mount it in the pod template spec", func() {
 					err := utils.UpdatePodTemplateSpecWithMoverVolumes(ctx, k8sClient, logger, ns.GetName(), podTemplateSpec,
 						[]volsyncv1alpha1.MoverVolume{
 							{
@@ -903,8 +903,8 @@ var _ = Describe("utils tests", func() {
 					specVolumeMounts := podTemplateSpec.Spec.Containers[0].VolumeMounts
 					specVolumes := podTemplateSpec.Spec.Volumes
 
-					Expect(len(specVolumeMounts)).To(Equal(2))
-					Expect(len(specVolumes)).To(Equal(2))
+					Expect(specVolumeMounts).To(HaveLen(2))
+					Expect(specVolumes).To(HaveLen(2))
 
 					Expect(specVolumeMounts[0]).To(Equal(origVolumeMount))
 					Expect(specVolumes[0]).To(Equal(origVolume))
@@ -919,6 +919,49 @@ var _ = Describe("utils tests", func() {
 						VolumeSource: corev1.VolumeSource{
 							Secret: &corev1.SecretVolumeSource{
 								SecretName: "addl-sec1",
+							},
+						},
+					}))
+				})
+			})
+
+			// nolint:dupl // Same as above, but for an NFS mount
+			When("moverVolumes has a volume source that is an NFS mount", func() {
+				It("should mount it in the pod template spec", func() {
+					err := utils.UpdatePodTemplateSpecWithMoverVolumes(ctx, k8sClient, logger, ns.GetName(), podTemplateSpec,
+						[]volsyncv1alpha1.MoverVolume{
+							{
+								MountPath: "test-my-nfs",
+								VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+									NFS: &corev1.NFSVolumeSource{
+										Path:   "/mnt/mynfs/Data",
+										Server: "nfs.server.local",
+									},
+								},
+							},
+						})
+					Expect(err).NotTo(HaveOccurred())
+
+					specVolumeMounts := podTemplateSpec.Spec.Containers[0].VolumeMounts
+					specVolumes := podTemplateSpec.Spec.Volumes
+
+					Expect(specVolumeMounts).To(HaveLen(2))
+					Expect(specVolumes).To(HaveLen(2))
+
+					Expect(specVolumeMounts[0]).To(Equal(origVolumeMount))
+					Expect(specVolumes[0]).To(Equal(origVolume))
+
+					// new Secret should be added
+					Expect(specVolumeMounts[1]).To(Equal(corev1.VolumeMount{
+						Name:      "u-test-my-nfs",
+						MountPath: "/mnt/test-my-nfs",
+					}))
+					Expect(specVolumes[1]).To(Equal(corev1.Volume{
+						Name: "u-test-my-nfs",
+						VolumeSource: corev1.VolumeSource{
+							NFS: &corev1.NFSVolumeSource{
+								Path:   "/mnt/mynfs/Data",
+								Server: "nfs.server.local",
 							},
 						},
 					}))
@@ -964,14 +1007,24 @@ var _ = Describe("utils tests", func() {
 									},
 								},
 							},
+							{
+								// NFS mount
+								MountPath: "test-nfs",
+								VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+									NFS: &corev1.NFSVolumeSource{
+										Path:   "/mnt/mynfs/Data",
+										Server: "nfs.server.local",
+									},
+								},
+							},
 						})
 					Expect(err).NotTo(HaveOccurred())
 
 					specVolumeMounts := podTemplateSpec.Spec.Containers[0].VolumeMounts
 					specVolumes := podTemplateSpec.Spec.Volumes
 
-					Expect(len(specVolumeMounts)).To(Equal(4))
-					Expect(len(specVolumes)).To(Equal(4))
+					Expect(specVolumeMounts).To(HaveLen(5))
+					Expect(specVolumes).To(HaveLen(5))
 
 					Expect(specVolumeMounts[0]).To(Equal(origVolumeMount))
 					Expect(specVolumes[0]).To(Equal(origVolume))
@@ -1024,6 +1077,21 @@ var _ = Describe("utils tests", func() {
 										Path: "path2",
 									},
 								},
+							},
+						},
+					}))
+
+					// new NFS mount should be added
+					Expect(specVolumeMounts[4]).To(Equal(corev1.VolumeMount{
+						Name:      "u-test-nfs",
+						MountPath: "/mnt/test-nfs",
+					}))
+					Expect(specVolumes[4]).To(Equal(corev1.Volume{
+						Name: "u-test-nfs",
+						VolumeSource: corev1.VolumeSource{
+							NFS: &corev1.NFSVolumeSource{
+								Path:   "/mnt/mynfs/Data",
+								Server: "nfs.server.local",
 							},
 						},
 					}))
@@ -1083,7 +1151,7 @@ var _ = Describe("utils tests", func() {
 			It("Should use prefix + hashed owner name when > 63 chars", func() {
 				jobName := utils.GetJobName("myprefix-", rdlongname)
 				hashedName := utils.GetHashedName(rdlongname.GetName())
-				Expect(len(hashedName)).To(Equal(8))
+				Expect(hashedName).To(HaveLen(8))
 				Expect(jobName).To(Equal("myprefix-" + hashedName))
 			})
 		})
