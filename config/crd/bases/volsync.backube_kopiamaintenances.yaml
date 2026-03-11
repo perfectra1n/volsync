@@ -1252,13 +1252,144 @@ spec:
                   MoverPodLabels that should be added to maintenance pods.
                   These will be in addition to any labels that VolSync may add.
                 type: object
+              moverVolumes:
+                description: |-
+                  MoverVolumes are PVCs, Secrets, or NFS volumes that should additionally be mounted
+                  to the maintenance job pod. This should only be used by advanced users.
+                items:
+                  properties:
+                    mountPath:
+                      description: |-
+                        Path to give the volume when mounting under /mnt in the mover job pod.
+                        For example if mountPath is 'my-pvc' then this moverVolume will be mounted in the mover pod
+                        at /mnt/my-pvc
+                      type: string
+                    volumeSource:
+                      description: volumeSource represents the secret or PersistentVolumeClaim
+                        that should be mounted to the mover pod.
+                      properties:
+                        nfs:
+                          description: |-
+                            nfs represents an NFS mount on the host that shares a pod's lifetime
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                          properties:
+                            path:
+                              description: |-
+                                path that is exported by the NFS server.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                              type: string
+                            readOnly:
+                              description: |-
+                                readOnly here will force the NFS export to be mounted with read-only permissions.
+                                Defaults to false.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                              type: boolean
+                            server:
+                              description: |-
+                                server is the hostname or IP address of the NFS server.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                              type: string
+                          required:
+                          - path
+                          - server
+                          type: object
+                        persistentVolumeClaim:
+                          description: |-
+                            persistentVolumeClaimVolumeSource represents a reference to a
+                            PersistentVolumeClaim in the same namespace.
+                            More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+                            nolint:lll
+                          properties:
+                            claimName:
+                              description: |-
+                                claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.
+                                More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+                              type: string
+                            readOnly:
+                              description: |-
+                                readOnly Will force the ReadOnly setting in VolumeMounts.
+                                Default false.
+                              type: boolean
+                          required:
+                          - claimName
+                          type: object
+                        secret:
+                          description: |-
+                            secret represents a secret that should populate this volume.
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#secret
+                          properties:
+                            defaultMode:
+                              description: |-
+                                defaultMode is Optional: mode bits used to set permissions on created files by default.
+                                Must be an octal value between 0000 and 0777 or a decimal value between 0 and 511.
+                                YAML accepts both octal and decimal values, JSON requires decimal values
+                                for mode bits. Defaults to 0644.
+                                Directories within the path are not affected by this setting.
+                                This might be in conflict with other options that affect the file
+                                mode, like fsGroup, and the result can be other mode bits set.
+                              format: int32
+                              type: integer
+                            items:
+                              description: |-
+                                items If unspecified, each key-value pair in the Data field of the referenced
+                                Secret will be projected into the volume as a file whose name is the
+                                key and content is the value. If specified, the listed keys will be
+                                projected into the specified paths, and unlisted keys will not be
+                                present. If a key is specified which is not present in the Secret,
+                                the volume setup will error unless it is marked optional. Paths must be
+                                relative and may not contain the '..' path or start with '..'.
+                              items:
+                                description: Maps a string key to a path within a
+                                  volume.
+                                properties:
+                                  key:
+                                    description: key is the key to project.
+                                    type: string
+                                  mode:
+                                    description: |-
+                                      mode is Optional: mode bits used to set permissions on this file.
+                                      Must be an octal value between 0000 and 0777 or a decimal value between 0 and 511.
+                                      YAML accepts both octal and decimal values, JSON requires decimal values for mode bits.
+                                      If not specified, the volume defaultMode will be used.
+                                      This might be in conflict with other options that affect the file
+                                      mode, like fsGroup, and the result can be other mode bits set.
+                                    format: int32
+                                    type: integer
+                                  path:
+                                    description: |-
+                                      path is the relative path of the file to map the key to.
+                                      May not be an absolute path.
+                                      May not contain the path element '..'.
+                                      May not start with the string '..'.
+                                    type: string
+                                required:
+                                - key
+                                - path
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            optional:
+                              description: optional field specify whether the Secret
+                                or its keys must be defined
+                              type: boolean
+                            secretName:
+                              description: |-
+                                secretName is the name of the secret in the pod's namespace to use.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#secret
+                              type: string
+                          type: object
+                      type: object
+                  required:
+                  - mountPath
+                  - volumeSource
+                  type: object
+                type: array
               nodeSelector:
                 additionalProperties:
                   type: string
                 description: |-
                   NodeSelector for maintenance pods.
-                  NOTE: This field is preserved for future implementation. Currently, NodeSelector is not
-                  directly supported by the Kopia mover spec and will be ignored.
+                  Use to schedule maintenance jobs on specific nodes.
                 type: object
               podSecurityContext:
                 description: |-
@@ -1630,8 +1761,7 @@ spec:
               tolerations:
                 description: |-
                   Tolerations for maintenance pods.
-                  NOTE: This field is preserved for future implementation. Currently, Tolerations are not
-                  directly supported by the Kopia mover spec and will be ignored.
+                  Allows scheduling on nodes with matching taints.
                 items:
                   description: |-
                     The pod this Toleration is attached to tolerates any taint that matches
@@ -1650,9 +1780,10 @@ spec:
                     operator:
                       description: |-
                         Operator represents a key's relationship to the value.
-                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                         Exists is equivalent to wildcard for value, so that a pod can
                         tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                       type: string
                     tolerationSeconds:
                       description: |-

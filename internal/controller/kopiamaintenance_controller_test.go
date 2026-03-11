@@ -21,10 +21,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
+	"github.com/backube/volsync/internal/controller/utils"
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +36,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -1093,6 +1096,508 @@ func TestKopiaMaintenanceReconciler_EnsureCronJob_Updates(t *testing.T) {
 					t.Error("Expected NodeSelectorTerms to be set")
 				}
 			}
+		}
+	})
+}
+
+func TestKopiaMaintenanceReconciler_BuildCronJob_MoverVolumes(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = corev1.AddToScheme(s)
+	_ = batchv1.AddToScheme(s)
+	_ = volsyncv1alpha1.AddToScheme(s)
+
+	t.Run("buildMaintenanceCronJob with NFS moverVolume", func(t *testing.T) {
+		namespace := "test-ns-nfs"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				MoverVolumes: []volsyncv1alpha1.MoverVolume{
+					{
+						MountPath: "nfs-data",
+						VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+							NFS: &corev1.NFSVolumeSource{
+								Server: "192.168.1.100",
+								Path:   "/export/data",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:latest",
+		}
+
+		cronJob, err := r.buildMaintenanceCronJob(context.Background(), maintenance, cronJobName)
+		if err != nil {
+			t.Fatalf("buildMaintenanceCronJob() error = %v", err)
+		}
+
+		// Verify NFS volume is present
+		podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+		foundVolume := false
+		for _, v := range podSpec.Volumes {
+			if v.NFS != nil && v.NFS.Server == "192.168.1.100" && v.NFS.Path == "/export/data" {
+				foundVolume = true
+				break
+			}
+		}
+		if !foundVolume {
+			t.Error("Expected NFS volume to be present in CronJob pod spec")
+		}
+
+		// Verify volume mount is present
+		container := podSpec.Containers[0]
+		foundMount := false
+		for _, vm := range container.VolumeMounts {
+			if vm.MountPath == "/mnt/nfs-data" {
+				foundMount = true
+				break
+			}
+		}
+		if !foundMount {
+			t.Error("Expected NFS volume mount at /mnt/nfs-data")
+		}
+	})
+
+	t.Run("buildMaintenanceCronJob with Secret moverVolume", func(t *testing.T) {
+		namespace := "test-ns-secret"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		moverSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"key": []byte("value")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				MoverVolumes: []volsyncv1alpha1.MoverVolume{
+					{
+						MountPath: "my-secret",
+						VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName: "my-secret",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, moverSecret).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:latest",
+		}
+
+		cronJob, err := r.buildMaintenanceCronJob(context.Background(), maintenance, cronJobName)
+		if err != nil {
+			t.Fatalf("buildMaintenanceCronJob() error = %v", err)
+		}
+
+		// Verify Secret volume is present
+		podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+		foundVolume := false
+		for _, v := range podSpec.Volumes {
+			if v.Secret != nil && v.Secret.SecretName == "my-secret" {
+				foundVolume = true
+				break
+			}
+		}
+		if !foundVolume {
+			t.Error("Expected Secret volume to be present in CronJob pod spec")
+		}
+
+		// Verify volume mount is present
+		container := podSpec.Containers[0]
+		foundMount := false
+		for _, vm := range container.VolumeMounts {
+			if vm.MountPath == "/mnt/my-secret" {
+				foundMount = true
+				break
+			}
+		}
+		if !foundMount {
+			t.Error("Expected Secret volume mount at /mnt/my-secret")
+		}
+	})
+
+	t.Run("buildMaintenanceCronJob without moverVolumes has no extra volumes", func(t *testing.T) {
+		namespace := "test-ns-noextra"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:latest",
+		}
+
+		cronJob, err := r.buildMaintenanceCronJob(context.Background(), maintenance, cronJobName)
+		if err != nil {
+			t.Fatalf("buildMaintenanceCronJob() error = %v", err)
+		}
+
+		// Verify no NFS/Secret/PVC mover volumes (only cache-related volumes should exist)
+		podSpec := cronJob.Spec.JobTemplate.Spec.Template.Spec
+		for _, v := range podSpec.Volumes {
+			if v.NFS != nil {
+				t.Error("Unexpected NFS volume in CronJob pod spec without moverVolumes")
+			}
+			// Secret volumes with "u-" prefix would be mover volumes
+			if v.Secret != nil && len(v.Name) > 2 && v.Name[:2] == "u-" {
+				t.Error("Unexpected mover Secret volume in CronJob pod spec without moverVolumes")
+			}
+		}
+	})
+
+	t.Run("ensureCronJob detects moverVolumes changes", func(t *testing.T) {
+		namespace := "test-ns-mv-update"
+		maintName := "test-maintenance"
+		cronJobName := generateCronJobName(namespace, maintName)
+
+		repoSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-repo-secret",
+				Namespace: namespace,
+			},
+			Data: map[string][]byte{"KOPIA_PASSWORD": []byte("test")},
+		}
+
+		maintenance := &volsyncv1alpha1.KopiaMaintenance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maintName,
+				Namespace: namespace,
+			},
+			Spec: volsyncv1alpha1.KopiaMaintenanceSpec{
+				Repository: volsyncv1alpha1.KopiaRepositorySpec{
+					Repository: "test-repo-secret",
+				},
+				MoverVolumes: []volsyncv1alpha1.MoverVolume{
+					{
+						MountPath: "nfs-share",
+						VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+							NFS: &corev1.NFSVolumeSource{
+								Server: "10.0.0.1",
+								Path:   "/share",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		// Create existing CronJob WITHOUT mover volumes
+		existingCronJob := &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cronJobName,
+				Namespace: namespace,
+			},
+			Spec: batchv1.CronJobSpec{
+				Schedule: "0 2 * * *",
+				JobTemplate: batchv1.JobTemplateSpec{
+					Spec: batchv1.JobSpec{
+						ActiveDeadlineSeconds: ptr.To(int64(10800)),
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"volsync.backube/kopia-maintenance": "true",
+									"volsync.backube/maintenance-name":  maintName,
+								},
+							},
+							Spec: corev1.PodSpec{
+								ServiceAccountName: "default",
+								SecurityContext: &corev1.PodSecurityContext{
+									RunAsNonRoot: ptr.To(true),
+									RunAsUser:    ptr.To(int64(1000)),
+									FSGroup:      ptr.To(int64(1000)),
+								},
+								Containers: []corev1.Container{
+									{
+										Name:  "kopia-maintenance",
+										Image: "quay.io/backube/volsync:latest",
+										SecurityContext: &corev1.SecurityContext{
+											AllowPrivilegeEscalation: ptr.To(false),
+											ReadOnlyRootFilesystem:   ptr.To(true),
+											RunAsNonRoot:             ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(s).
+			WithObjects(repoSecret, maintenance, existingCronJob).
+			Build()
+
+		r := &KopiaMaintenanceReconciler{
+			Client:         fakeClient,
+			Scheme:         s,
+			Log:            logr.Discard(),
+			EventRecorder:  &record.FakeRecorder{},
+			containerImage: "quay.io/backube/volsync:latest",
+		}
+
+		_, err := r.ensureCronJob(context.Background(), maintenance)
+		if err != nil {
+			t.Fatalf("ensureCronJob() error = %v", err)
+		}
+
+		// Verify that the CronJob was updated with the NFS volume
+		updatedCronJob := &batchv1.CronJob{}
+		_ = fakeClient.Get(context.Background(), client.ObjectKeyFromObject(existingCronJob), updatedCronJob)
+
+		podSpec := updatedCronJob.Spec.JobTemplate.Spec.Template.Spec
+		foundNFS := false
+		for _, v := range podSpec.Volumes {
+			if v.NFS != nil && v.NFS.Server == "10.0.0.1" {
+				foundNFS = true
+				break
+			}
+		}
+		if !foundNFS {
+			t.Error("Expected CronJob to be updated with NFS mover volume")
+		}
+
+		foundMount := false
+		for _, vm := range podSpec.Containers[0].VolumeMounts {
+			if vm.MountPath == "/mnt/nfs-share" {
+				foundMount = true
+				break
+			}
+		}
+		if !foundMount {
+			t.Error("Expected CronJob to be updated with NFS volume mount at /mnt/nfs-share")
+		}
+	})
+}
+
+func TestKopiaMaintenanceReconciler_ValidateMoverVolumes(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = corev1.AddToScheme(s)
+	_ = volsyncv1alpha1.AddToScheme(s)
+
+	t.Run("validation rejects empty mount path", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+		moverVolumes := []volsyncv1alpha1.MoverVolume{
+			{
+				MountPath: "",
+				VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+					NFS: &corev1.NFSVolumeSource{
+						Server: "10.0.0.1",
+						Path:   "/share",
+					},
+				},
+			},
+		}
+
+		err := utils.ValidateMoverVolumes(context.Background(), fakeClient, logr.Discard(),
+			"test-ns", moverVolumes)
+		if err == nil {
+			t.Fatal("Expected error for empty mount path, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot be empty") {
+			t.Errorf("Expected 'cannot be empty' error, got: %v", err)
+		}
+	})
+
+	t.Run("validation rejects mount path with path separators", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+		moverVolumes := []volsyncv1alpha1.MoverVolume{
+			{
+				MountPath: "bad/path",
+				VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+					NFS: &corev1.NFSVolumeSource{
+						Server: "10.0.0.1",
+						Path:   "/share",
+					},
+				},
+			},
+		}
+
+		err := utils.ValidateMoverVolumes(context.Background(), fakeClient, logr.Discard(),
+			"test-ns", moverVolumes)
+		if err == nil {
+			t.Fatal("Expected error for mount path with separators, got nil")
+		}
+		if !strings.Contains(err.Error(), "path separators") {
+			t.Errorf("Expected 'path separators' error, got: %v", err)
+		}
+	})
+
+	t.Run("validation rejects mount path with path traversal", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+		moverVolumes := []volsyncv1alpha1.MoverVolume{
+			{
+				MountPath: "bad..path",
+				VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+					NFS: &corev1.NFSVolumeSource{
+						Server: "10.0.0.1",
+						Path:   "/share",
+					},
+				},
+			},
+		}
+
+		err := utils.ValidateMoverVolumes(context.Background(), fakeClient, logr.Discard(),
+			"test-ns", moverVolumes)
+		if err == nil {
+			t.Fatal("Expected error for mount path with path traversal, got nil")
+		}
+		if !strings.Contains(err.Error(), "path traversal") {
+			t.Errorf("Expected 'path traversal' error, got: %v", err)
+		}
+	})
+
+	t.Run("validation accepts valid NFS moverVolume", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+		moverVolumes := []volsyncv1alpha1.MoverVolume{
+			{
+				MountPath: "nfs-data",
+				VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+					NFS: &corev1.NFSVolumeSource{
+						Server: "10.0.0.1",
+						Path:   "/share",
+					},
+				},
+			},
+		}
+
+		err := utils.ValidateMoverVolumes(context.Background(), fakeClient, logr.Discard(),
+			"test-ns", moverVolumes)
+		if err != nil {
+			t.Fatalf("Expected no error for valid NFS moverVolume, got: %v", err)
+		}
+	})
+
+	t.Run("validation rejects PVC that does not exist", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+		moverVolumes := []volsyncv1alpha1.MoverVolume{
+			{
+				MountPath: "my-pvc",
+				VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: "nonexistent-pvc",
+					},
+				},
+			},
+		}
+
+		err := utils.ValidateMoverVolumes(context.Background(), fakeClient, logr.Discard(),
+			"test-ns", moverVolumes)
+		if err == nil {
+			t.Fatal("Expected error for nonexistent PVC, got nil")
+		}
+	})
+
+	t.Run("validation rejects Secret that does not exist", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+		moverVolumes := []volsyncv1alpha1.MoverVolume{
+			{
+				MountPath: "my-secret",
+				VolumeSource: volsyncv1alpha1.MoverVolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: "nonexistent-secret",
+					},
+				},
+			},
+		}
+
+		err := utils.ValidateMoverVolumes(context.Background(), fakeClient, logr.Discard(),
+			"test-ns", moverVolumes)
+		if err == nil {
+			t.Fatal("Expected error for nonexistent Secret, got nil")
 		}
 	})
 }

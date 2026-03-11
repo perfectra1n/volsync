@@ -526,6 +526,19 @@ func (r *KopiaMaintenanceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// Validate mover volumes if specified
+	if len(maintenance.Spec.MoverVolumes) > 0 {
+		if err := utils.ValidateMoverVolumes(ctx, r.Client, logger,
+			maintenance.Namespace, maintenance.Spec.MoverVolumes); err != nil {
+			logger.Error(err, "Invalid moverVolumes configuration")
+			r.EventRecorder.Event(maintenance, corev1.EventTypeWarning, "ValidationFailed", err.Error())
+			if statusErr := r.updateStatusWithError(ctx, maintenance, "", err); statusErr != nil {
+				logger.Error(statusErr, "Failed to update status after moverVolumes validation failure")
+			}
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Check if the object is being deleted
 	if !maintenance.DeletionTimestamp.IsZero() {
 		// Handle deletion
@@ -906,6 +919,14 @@ func (r *KopiaMaintenanceReconciler) ensureMaintenanceJob(ctx context.Context, m
 	}
 	r.configureCacheVolume(&job.Spec.Template.Spec, cachePVC, maintenance)
 
+	// Mount mover volumes if specified
+	if len(maintenance.Spec.MoverVolumes) > 0 {
+		if err := utils.UpdatePodTemplateSpecWithMoverVolumes(ctx, r.Client, r.Log,
+			maintenance.Namespace, &job.Spec.Template, maintenance.Spec.MoverVolumes); err != nil {
+			return "", fmt.Errorf("failed to add mover volumes: %w", err)
+		}
+	}
+
 	// Set owner reference so the job is cleaned up when KopiaMaintenance is deleted
 	if err := controllerutil.SetControllerReference(maintenance, job, r.Scheme); err != nil {
 		return "", fmt.Errorf("failed to set owner reference: %w", err)
@@ -1158,6 +1179,22 @@ func (r *KopiaMaintenanceReconciler) ensureCronJob(ctx context.Context, maintena
 				"name", cronJobName,
 				"oldTolerations", existingTolerations,
 				"newTolerations", desiredTolerations)
+		}
+
+		// Check if Volumes or VolumeMounts need updating (captures moverVolumes changes)
+		desiredCronJob, err := r.buildMaintenanceCronJob(ctx, maintenance, cronJobName)
+		if err != nil {
+			return "", fmt.Errorf("failed to build desired CronJob for comparison: %w", err)
+		}
+		desiredVolumes := desiredCronJob.Spec.JobTemplate.Spec.Template.Spec.Volumes
+		existingVolumes := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Volumes
+		desiredVolumeMounts := desiredCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].VolumeMounts
+		existingVolumeMounts := existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].VolumeMounts
+		if !reflect.DeepEqual(existingVolumes, desiredVolumes) || !reflect.DeepEqual(existingVolumeMounts, desiredVolumeMounts) {
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Volumes = desiredVolumes
+			existingCronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0].VolumeMounts = desiredVolumeMounts
+			updateNeeded = true
+			r.Log.Info("Updating maintenance CronJob Volumes/VolumeMounts", "name", cronJobName)
 		}
 
 		if updateNeeded {
@@ -1417,6 +1454,14 @@ func (r *KopiaMaintenanceReconciler) buildMaintenanceCronJob(ctx context.Context
 		return nil, fmt.Errorf("failed to ensure cache: %w", err)
 	}
 	r.configureCacheVolume(&cronJob.Spec.JobTemplate.Spec.Template.Spec, cachePVC, maintenance)
+
+	// Mount mover volumes if specified
+	if len(maintenance.Spec.MoverVolumes) > 0 {
+		if err := utils.UpdatePodTemplateSpecWithMoverVolumes(ctx, r.Client, r.Log,
+			maintenance.Namespace, &cronJob.Spec.JobTemplate.Spec.Template, maintenance.Spec.MoverVolumes); err != nil {
+			return nil, fmt.Errorf("failed to add mover volumes: %w", err)
+		}
+	}
 
 	// Apply history limits if specified
 	if maintenance.Spec.SuccessfulJobsHistoryLimit != nil {

@@ -205,6 +205,11 @@ type KopiaMaintenanceSpec struct {
 	// cache will be determined by other cache fields or use EmptyDir as fallback.
 	//+optional
 	CachePVC *string `json:"cachePVC,omitempty"`
+
+	// MoverVolumes are PVCs, Secrets, or NFS volumes that should additionally be mounted
+	// to the maintenance job pod. This should only be used by advanced users.
+	// +optional
+	MoverVolumes []MoverVolume `json:"moverVolumes,omitempty"`
 }
 
 // KopiaRepositorySpec defines the repository configuration for maintenance
