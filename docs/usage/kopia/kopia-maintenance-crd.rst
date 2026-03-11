@@ -127,6 +127,12 @@ KopiaMaintenanceSpec Fields
 **affinity** (*Affinity*, optional)
    Affinity settings for pod scheduling.
 
+**moverVolumes** (*[]MoverVolume*, optional)
+   Additional PVCs, Secrets, or NFS volumes to mount in the maintenance job pod.
+   This is intended for advanced users — for example, filesystem-based repositories
+   stored on NFS. Each entry requires a ``mountPath`` (mounted under ``/mnt/``) and
+   a ``volumeSource`` with one of: ``nfs``, ``persistentVolumeClaim``, or ``secret``.
+
 KopiaRepositorySelector Fields
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -514,8 +520,31 @@ Special Cases
 Filesystem Repositories with moverVolumes
 ------------------------------------------
 
-ReplicationSources using ``moverVolumes`` for filesystem repositories work with KopiaMaintenance. The repository
-secret should be configured with the appropriate filesystem URL (e.g., ``filesystem:///mnt/<mountPath>``).
+For filesystem-based Kopia repositories (e.g., stored on NFS), the KopiaMaintenance
+resource supports ``moverVolumes`` to mount the repository storage into the maintenance
+pod. The repository secret should reference the corresponding filesystem path
+(e.g., ``filesystem:///mnt/<mountPath>``).
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: nfs-repo-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: nfs-backup-config
+     schedule: "0 2 * * *"
+     moverVolumes:
+       - mountPath: nfs-repo
+         volumeSource:
+           nfs:
+             server: 192.168.1.100
+             path: /export/backups
+
+See the :doc:`kopiamaintenance` page for more ``moverVolumes`` examples including
+PVC and Secret volume sources.
 
 Multiple Repositories Same Namespace
 ------------------------------------

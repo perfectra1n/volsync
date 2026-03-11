@@ -90,6 +90,13 @@ Basic Structure
        - ReadWriteOnce
      # OR use existing PVC
      cachePVC: existing-cache-pvc
+     # Additional volumes (advanced - e.g., for NFS-based repositories)
+     # moverVolumes:
+     #   - mountPath: nfs-repo
+     #     volumeSource:
+     #       nfs:
+     #         server: 192.168.1.100
+     #         path: /export/backups
 
 Field Reference
 ---------------
@@ -227,6 +234,21 @@ Optional Fields
 **cachePVC** (*string*, optional)
    Name of an existing PVC to use for Kopia cache.
    If specified, other cache configuration fields are ignored.
+
+**moverVolumes** (*[]MoverVolume*, optional)
+   Additional PVCs, Secrets, or NFS volumes to mount in the maintenance job pod.
+   This is intended for advanced users who need extra volumes available during
+   maintenance — for example, filesystem-based repositories stored on NFS.
+
+   Each entry has:
+
+   - **mountPath** (*string*, required) — Path component under ``/mnt/`` where
+     the volume will be mounted. Must not contain ``/`` or ``..``.
+   - **volumeSource** (*MoverVolumeSource*, required) — One of:
+
+     - **nfs** — NFS volume (``server``, ``path``, optional ``readOnly``)
+     - **persistentVolumeClaim** — Reference to an existing PVC (``claimName``)
+     - **secret** — Reference to an existing Secret (``secretName``)
 
 Status Fields
 ^^^^^^^^^^^^^
@@ -522,6 +544,110 @@ No Cache (EmptyDir Fallback)
      trigger:
        schedule: "0 4 * * *"
      # No cache configuration - will use EmptyDir
+
+MoverVolumes Examples
+---------------------
+
+Filesystem Repository on NFS
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When your Kopia repository is stored on an NFS share, use ``moverVolumes`` to
+mount it into the maintenance pod so the maintenance job can access the
+repository data:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: nfs-repo-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: nfs-backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     moverVolumes:
+       - mountPath: nfs-repo
+         volumeSource:
+           nfs:
+             server: 192.168.1.100
+             path: /export/backups
+
+.. note::
+
+   The repository secret should reference the filesystem path matching the
+   mount, e.g. ``filesystem:///mnt/nfs-repo``.
+
+Mounting an Additional PVC
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: pvc-repo-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: fs-backup-config
+     trigger:
+       schedule: "0 3 * * *"
+     moverVolumes:
+       - mountPath: repo-data
+         volumeSource:
+           persistentVolumeClaim:
+             claimName: kopia-repo-pvc
+
+Mounting a Secret
+^^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: maintenance-with-extra-secret
+     namespace: production
+   spec:
+     repository:
+       repository: backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     moverVolumes:
+       - mountPath: extra-creds
+         volumeSource:
+           secret:
+             secretName: additional-credentials
+
+Multiple MoverVolumes
+^^^^^^^^^^^^^^^^^^^^^^
+
+You can mount multiple volumes at once:
+
+.. code-block:: yaml
+
+   apiVersion: volsync.backube/v1alpha1
+   kind: KopiaMaintenance
+   metadata:
+     name: multi-volume-maintenance
+     namespace: production
+   spec:
+     repository:
+       repository: backup-config
+     trigger:
+       schedule: "0 2 * * *"
+     moverVolumes:
+       - mountPath: nfs-repo
+         volumeSource:
+           nfs:
+             server: 10.0.0.50
+             path: /export/kopia
+       - mountPath: extra-creds
+         volumeSource:
+           secret:
+             secretName: repo-credentials
 
 Temporarily Suspended Maintenance
 ----------------------------------
