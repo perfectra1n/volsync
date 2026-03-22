@@ -107,6 +107,18 @@ the permissions of the mover to that of the primary workload in the Namespace.
 As general guidance, if the primary workload specifies a security context, that
 same security context should be used for VolSync.
 
+.. tip::
+
+   When backing up multiple applications that run with different UIDs, a good
+   approach is to use a single consistent UID/GID for all VolSync movers (e.g.,
+   2000) rather than matching each application's UID individually. When using
+   ``copyMethod: Snapshot``, the mover operates on a snapshot of the volume — the
+   original volume and its permissions are not modified. Use
+   ``fsGroupChangePolicy: OnRootMismatch`` in ``moverSecurityContext`` to
+   efficiently handle the group ownership change on the snapshot. This ensures
+   consistent repository ownership, making KopiaMaintenance configuration
+   straightforward. See :doc:`kopia/troubleshooting` for detailed examples.
+
 .. note::
   The Kopia mover supports ``readOnlyRootFilesystem: true`` security setting for
   enhanced security. When this setting is used, the mover automatically adjusts

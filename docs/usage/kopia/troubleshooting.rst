@@ -1691,7 +1691,64 @@ For repositories accessed from multiple namespaces with different users:
        fsGroup: 3000
        runAsNonRoot: true
 
-**Scenario 3: Strict Security Policies**
+**Scenario 3: Multiple Applications with Different UIDs**
+
+When backing up multiple applications that run with different UIDs (e.g., one app
+runs as UID 568, another as UID 1000), the maintenance pod needs a consistent UID
+to access the repository. The recommended approach is to use a single consistent
+UID/GID for all VolSync movers, separate from the application UIDs:
+
+.. code-block:: yaml
+
+   # ReplicationSource for app running as UID 568
+   apiVersion: volsync.backube/v1alpha1
+   kind: ReplicationSource
+   metadata:
+     name: myapp
+   spec:
+     sourcePVC: myapp-data
+     trigger:
+       schedule: "0 * * * *"
+     kopia:
+       copyMethod: Snapshot
+       moverSecurityContext:
+         runAsUser: 2000       # Consistent mover UID (not the app UID)
+         runAsGroup: 2000
+         fsGroup: 2000
+         fsGroupChangePolicy: OnRootMismatch
+
+Since ``copyMethod: Snapshot`` is used, the mover operates on a snapshot of the
+volume — the original volume and its permissions are not modified. The
+``fsGroupChangePolicy: OnRootMismatch`` setting efficiently handles the group
+ownership change on the snapshot without a full recursive chown.
+
+With all movers writing to the repository as the same UID/GID (e.g., 2000), the
+maintenance pod can simply use matching credentials:
+
+.. code-block:: yaml
+
+   # KopiaMaintenance matches the mover UID
+   spec:
+     podSecurityContext:
+       runAsUser: 2000
+       fsGroup: 2000
+
+.. tip::
+
+   As an alternative to overriding ``fsGroup``, you can use ``supplementalGroups``
+   to grant the mover access to the application's files without changing ownership:
+
+   .. code-block:: yaml
+
+      moverSecurityContext:
+        runAsUser: 2000
+        runAsGroup: 2000
+        supplementalGroups:
+          - 568    # The application's GID
+
+   This approach works well when the application files are group-readable.
+
+**Scenario 4: Strict Security Policies**
 
 When cluster has Pod Security Standards enforcement:
 
@@ -1709,7 +1766,7 @@ When cluster has Pod Security Standards enforcement:
        seLinuxOptions:
          level: "s0:c123,c456"
 
-**Scenario 4: Windows Containers**
+**Scenario 5: Windows Containers**
 
 For Windows-based storage systems:
 
@@ -1730,7 +1787,9 @@ Best Practices for Pod Security Context
 
 3. **Consistent Configuration**: Use the same ``podSecurityContext`` for backup (ReplicationSource) and maintenance operations
 
-4. **Test After Changes**: Always test maintenance after changing security context:
+4. **Use a Dedicated Mover UID**: When backing up multiple applications with different UIDs, configure all ``moverSecurityContext`` settings to use a single consistent UID/GID (e.g., 2000) rather than matching each application's UID. Combined with ``copyMethod: Snapshot`` and ``fsGroupChangePolicy: OnRootMismatch``, this ensures the repository is written with consistent ownership while leaving the original volumes untouched
+
+5. **Test After Changes**: Always test maintenance after changing security context:
 
    .. code-block:: bash
 
@@ -1738,9 +1797,9 @@ Best Practices for Pod Security Context
       kubectl patch kopiamaintenance <name> -n <namespace> \
         --type merge -p '{"spec":{"trigger":{"manual":"test-'$(date +%s)'"}}}'
 
-5. **Security Compliance**: Set ``runAsNonRoot: true`` for security best practices
+6. **Security Compliance**: Set ``runAsNonRoot: true`` for security best practices
 
-6. **Avoid Root**: Never use UID 0 (root) - Kopia doesn't require root privileges
+7. **Avoid Root**: Never use UID 0 (root) - Kopia doesn't require root privileges
 
 Debugging with KOPIA_MANUAL_CONFIG
 -----------------------------------
