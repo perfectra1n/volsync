@@ -95,7 +95,8 @@ function ensure_initialized {
     set +e  # Don't exit on command failure
 
     outfile=$(mktemp -q)
-    timeout 60s "${RESTIC[@]}" cat config > /dev/null 2>"$outfile"
+    # This read-only probe must not create a lock that can be orphaned if the timeout fires.
+    timeout 60s "${RESTIC[@]}" --no-lock cat config > /dev/null 2>"$outfile"
     rc=$?
 
     set -e  # Exit on command failure
