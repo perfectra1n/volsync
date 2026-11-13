@@ -32,8 +32,8 @@
 #
 # KOPIA_FORCE_CACHE_REBUILD - Force cache clearing before connection (default: false)
 #   Set to "true" to clear corrupted cache before attempting connection
-#   Useful for recovering from cache corruption errors (mmap errors, pack index errors)
-#   Safe to use - only removes cache data that Kopia can rebuild automatically
+#   Useful for recovering from confirmed cache corruption, not allocation failures
+#   Pending own-writes prevent cleanup to protect uncommitted backup data
 #
 # KOPIA_METADATA_CACHE_SIZE_LIMIT_MB - Maximum size of metadata cache in MB (default: auto)
 #   Controls the hard limit for Kopia's metadata cache
@@ -473,16 +473,17 @@ function check_var_defined {
 function is_cache_corruption_error {
     local error_output="$1"
 
-    # Check for specific cache corruption indicators
-    # Be precise to avoid false positives on network/auth errors
-    if echo "${error_output}" | grep -q -E "mmap.*error|unable to open pack index|error loading indexes|index.*corrupt|cache.*corrupt|bad index blob"; then
-        log_info "Detected cache corruption error in output"
-        return 0
+    # Allocation failures take precedence, even if other output mentions corruption.
+    # Clearing caches cannot fix exhausted memory or a process's memory-map limit.
+    if grep -qiE 'cannot allocate memory|out of memory|ENOMEM|errno[[:space:]]+12([^0-9]|$)' <<< "${error_output}"; then
+        log_warn "Repository allocation failed. Check available memory and vm.max_map_count; cache recovery skipped."
+        return 1
     fi
 
-    # Check for specific mmap errno values (ENOMEM=12, EINVAL=22, ENOSPC=28)
-    if echo "${error_output}" | grep -q -E "errno (12|22|28)"; then
-        log_info "Detected mmap-related errno indicating corruption"
+    # Generic mmap/index errors and errno values do not establish corruption.
+    # Require explicit corruption evidence before requesting guarded cache cleanup.
+    if grep -qiE 'index.*corrupt|cache.*corrupt|bad index blob' <<< "${error_output}"; then
+        log_info "Detected cache corruption error in output"
         return 0
     fi
 
